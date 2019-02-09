@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -16,16 +16,13 @@ package com.liferay.portal.upgrade.util;
 
 import com.liferay.portal.events.StartupHelperUtil;
 import com.liferay.portal.kernel.dao.db.DB;
-import com.liferay.portal.kernel.dao.db.DBManagerUtil;
-import com.liferay.portal.kernel.dao.jdbc.DataAccess;
+import com.liferay.portal.kernel.dao.db.DBFactoryUtil;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
 import com.liferay.portal.kernel.upgrade.UpgradeException;
 import com.liferay.portal.kernel.util.FileUtil;
 import com.liferay.portal.kernel.util.StringUtil;
 import com.liferay.portal.kernel.util.Validator;
-
-import java.sql.Connection;
 
 /**
  * @author Alexander Chow
@@ -37,16 +34,16 @@ public abstract class BaseUpgradeTableImpl extends Table {
 		super(tableName);
 	}
 
+	public BaseUpgradeTableImpl(String tableName, Object[][] columns) {
+		super(tableName, columns);
+	}
+
 	public String[] getIndexesSQL() throws Exception {
 		return _indexesSQL;
 	}
 
 	public boolean isAllowUniqueIndexes() throws Exception {
 		return _allowUniqueIndexes;
-	}
-
-	public boolean isDeleteTempFile() {
-		return _deleteTempFile;
 	}
 
 	public void setAllowUniqueIndexes(boolean allowUniqueIndexes)
@@ -65,56 +62,44 @@ public abstract class BaseUpgradeTableImpl extends Table {
 		super.setCreateSQL(createSQL);
 	}
 
-	public void setDeleteTempFile(boolean deleteTempFile) {
-		_deleteTempFile = deleteTempFile;
-	}
-
 	public void setIndexesSQL(String[] indexesSQL) throws Exception {
 		_indexesSQL = indexesSQL;
 	}
 
 	public void updateTable() throws Exception {
-		Connection connection = DataAccess.getConnection();
-
-		try {
-			updateTable(connection, connection, true);
-		}
-		finally {
-			DataAccess.cleanUp(connection);
-		}
-	}
-
-	protected void updateTable(
-			Connection sourceConnection, Connection targetConnection,
-			boolean deleteSource)
-		throws Exception {
-
 		_calledUpdateTable = true;
 
-		generateTempFile(sourceConnection);
-
-		String tempFileName = getTempFileName();
+		String tempFileName = generateTempFile();
 
 		try {
-			DB db = DBManagerUtil.getDB();
+			DB db = DBFactoryUtil.getDB();
 
-			if (Validator.isNotNull(tempFileName) && deleteSource) {
+			// ***************************************
+			// EXT Override Start
+			// ***************************************
+/*
+			if (Validator.isNotNull(tempFileName)) {
 				String deleteSQL = getDeleteSQL();
 
-				db.runSQL(sourceConnection, deleteSQL);
+				db.runSQL(deleteSQL);
 			}
+*/
+			
+			// ***************************************
+			// EXT Override End
+			// ***************************************
 
 			String createSQL = getCreateSQL();
 
 			if (Validator.isNotNull(createSQL)) {
-				if (deleteSource) {
-					db.runSQL(sourceConnection, "drop table " + getTableName());
-				}
+				db.runSQL("drop table " + getTableName());
 
-				db.runSQL(targetConnection, createSQL);
+				db.runSQL(createSQL);
 			}
 
-			populateTable(targetConnection);
+			if (Validator.isNotNull(tempFileName)) {
+				populateTable(tempFileName);
+			}
 
 			String[] indexesSQL = getIndexesSQL();
 
@@ -131,13 +116,10 @@ public abstract class BaseUpgradeTableImpl extends Table {
 				}
 
 				try {
-					db.runSQLTemplateString(
-						targetConnection, indexSQL, false, false);
+					db.runSQL(indexSQL);
 				}
 				catch (Exception e) {
-					if (_log.isWarnEnabled()) {
-						_log.warn(e.getMessage() + ": " + indexSQL);
-					}
+					_log.warn(e.getMessage() + ": " + indexSQL);
 				}
 			}
 
@@ -146,18 +128,16 @@ public abstract class BaseUpgradeTableImpl extends Table {
 			}
 		}
 		finally {
-			if (Validator.isNotNull(tempFileName) && _deleteTempFile) {
+			if (Validator.isNotNull(tempFileName)) {
 				FileUtil.delete(tempFileName);
 			}
 		}
 	}
 
-	private static final Log _log = LogFactoryUtil.getLog(
-		BaseUpgradeTableImpl.class);
+	private static Log _log = LogFactoryUtil.getLog(BaseUpgradeTableImpl.class);
 
 	private boolean _allowUniqueIndexes;
 	private boolean _calledUpdateTable;
-	private boolean _deleteTempFile;
 	private String[] _indexesSQL = new String[0];
 
 }

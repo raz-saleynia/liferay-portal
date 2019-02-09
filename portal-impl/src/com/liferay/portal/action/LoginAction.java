@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,32 +14,26 @@
 
 package com.liferay.portal.action;
 
-import com.liferay.petra.string.CharPool;
-import com.liferay.petra.string.StringPool;
-import com.liferay.portal.kernel.portlet.PortletURLFactoryUtil;
 import com.liferay.portal.kernel.portlet.WindowStateFactory;
-import com.liferay.portal.kernel.security.auth.AuthTokenUtil;
-import com.liferay.portal.kernel.security.auth.session.AuthenticatedSessionManagerUtil;
-import com.liferay.portal.kernel.theme.ThemeDisplay;
-import com.liferay.portal.kernel.util.HttpUtil;
-import com.liferay.portal.kernel.util.ParamUtil;
-import com.liferay.portal.kernel.util.PortalUtil;
-import com.liferay.portal.kernel.util.PortletKeys;
-import com.liferay.portal.kernel.util.StringBundler;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
-import com.liferay.portal.kernel.util.WebKeys;
-import com.liferay.portal.security.sso.SSOUtil;
-import com.liferay.portal.struts.Action;
-import com.liferay.portal.struts.model.ActionForward;
-import com.liferay.portal.struts.model.ActionMapping;
-import com.liferay.portal.util.PropsValues;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.kernel.util.PropsKeys;
+import com.liferay.portal.theme.ThemeDisplay;
+import com.liferay.portal.util.PortalUtil;
+import com.liferay.portal.util.PortletKeys;
+import com.liferay.portal.util.PrefsPropsUtil;
+import com.liferay.portal.util.*;
+import com.liferay.portal.util.WebKeys;
+import com.liferay.portlet.PortletURLFactoryUtil;
+import com.liferay.portlet.login.util.LoginUtil;
+import org.apache.struts.action.Action;
+import org.apache.struts.action.ActionForm;
+import org.apache.struts.action.ActionForward;
+import org.apache.struts.action.ActionMapping;
 
 import javax.portlet.PortletMode;
 import javax.portlet.PortletRequest;
 import javax.portlet.PortletURL;
 import javax.portlet.WindowState;
-
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
@@ -48,152 +42,153 @@ import javax.servlet.http.HttpSession;
  * @author Brian Wing Shun Chan
  * @author Scott Lee
  */
-public class LoginAction implements Action {
+public class LoginAction extends Action {
 
-	@Override
-	public ActionForward execute(
-			ActionMapping actionMapping, HttpServletRequest request,
-			HttpServletResponse response)
-		throws Exception {
+    @Override
+    public ActionForward execute(
+            ActionMapping actionMapping, ActionForm actionForm,
+            HttpServletRequest request, HttpServletResponse response)
+            throws Exception {
 
-		ThemeDisplay themeDisplay = (ThemeDisplay)request.getAttribute(
-			WebKeys.THEME_DISPLAY);
+        ThemeDisplay themeDisplay = (ThemeDisplay)request.getAttribute(
+                WebKeys.THEME_DISPLAY);
 
-		if (PropsValues.AUTH_LOGIN_DISABLED) {
-			response.sendRedirect(
-				themeDisplay.getPathMain() +
-					PropsValues.AUTH_LOGIN_DISABLED_PATH);
+        if (PropsValues.AUTH_LOGIN_DISABLED) {
+            response.sendRedirect(
+                    themeDisplay.getPathMain() +
+                            PropsValues.AUTH_LOGIN_DISABLED_PATH);
 
-			return null;
-		}
+            return null;
+        }
 
-		if (PropsValues.COMPANY_SECURITY_AUTH_REQUIRES_HTTPS &&
-			!request.isSecure()) {
+        /*
+        if (PropsValues.COMPANY_SECURITY_AUTH_REQUIRES_HTTPS &&
+                !request.isSecure()) {
 
-			StringBundler sb = new StringBundler(4);
+            StringBundler sb = new StringBundler(4);
 
-			sb.append(PortalUtil.getPortalURL(request, true));
-			sb.append(request.getRequestURI());
-			sb.append(StringPool.QUESTION);
-			sb.append(request.getQueryString());
+            sb.append(PortalUtil.getPortalURL(request, true));
+            sb.append(request.getRequestURI());
+            sb.append(StringPool.QUESTION);
+            sb.append(request.getQueryString());
 
-			response.sendRedirect(sb.toString());
+            response.sendRedirect(sb.toString());
 
-			return null;
-		}
+            return null;
+        }
+        */
 
-		String login = ParamUtil.getString(request, "login");
-		String password = request.getParameter("password");
+        String login = ParamUtil.getString(request, "login");
+        String password = request.getParameter("password");
+        boolean rememberMe = ParamUtil.getBoolean(request, "rememberMe");
+        String authType = ParamUtil.getString(request, "authType");
 
-		if (Validator.isNotNull(login) && Validator.isNotNull(password)) {
-			AuthTokenUtil.checkCSRFToken(request, LoginAction.class.getName());
+        if (Validator.isNotNull(login) && Validator.isNotNull(password)) {
+            LoginUtil.login(
+                    request, response, login, password, rememberMe, authType);
+        }
 
-			boolean rememberMe = ParamUtil.getBoolean(request, "rememberMe");
-			String authType = ParamUtil.getString(request, "authType");
+        HttpSession session = request.getSession();
 
-			AuthenticatedSessionManagerUtil.login(
-				request, response, login, password, rememberMe, authType);
-		}
+        if ((session.getAttribute("j_username") != null) &&
+                (session.getAttribute("j_password") != null)) {
 
-		HttpSession session = request.getSession();
+            if (PropsValues.PORTAL_JAAS_ENABLE) {
+                return actionMapping.findForward("/portal/touch_protected.jsp");
+            }
 
-		if ((session.getAttribute("j_username") != null) &&
-			(session.getAttribute("j_password") != null)) {
+            String redirect = ParamUtil.getString(request, "redirect");
 
-			if (PropsValues.PORTAL_JAAS_ENABLE) {
-				return actionMapping.getActionForward(
-					"/portal/touch_protected.jsp");
-			}
+            redirect = PortalUtil.escapeRedirect(redirect);
 
-			String redirect = ParamUtil.getString(request, "redirect");
+            if (Validator.isNull(redirect)) {
+                redirect = themeDisplay.getPathMain();
+            }
 
-			redirect = PortalUtil.escapeRedirect(redirect);
+            if (redirect.charAt(0) == CharPool.SLASH) {
+                String portalURL = PortalUtil.getPortalURL(
+                        request, request.isSecure());
 
-			if (Validator.isNull(redirect)) {
-				redirect = themeDisplay.getPathMain();
-			}
+                if (Validator.isNotNull(portalURL)) {
+                    redirect = portalURL.concat(redirect);
+                }
+            }
 
-			if (redirect.charAt(0) == CharPool.SLASH) {
-				String portalURL = PortalUtil.getPortalURL(
-					request, request.isSecure());
+            response.sendRedirect(redirect);
 
-				if (Validator.isNotNull(portalURL)) {
-					redirect = portalURL.concat(redirect);
-				}
-			}
+            return null;
+        }
 
-			response.sendRedirect(redirect);
+        String redirect = PortalUtil.getSiteLoginURL(themeDisplay);
 
-			return null;
-		}
+        if (Validator.isNull(redirect)) {
+            redirect = PropsValues.AUTH_LOGIN_URL;
+        }
 
-		String redirect = PortalUtil.getSiteLoginURL(themeDisplay);
+        if (Validator.isNull(redirect)) {
+            PortletURL portletURL = PortletURLFactoryUtil.create(
+                    request, PortletKeys.LOGIN, themeDisplay.getPlid(),
+                    PortletRequest.RENDER_PHASE);
 
-		if (Validator.isNull(redirect)) {
-			redirect = PropsValues.AUTH_LOGIN_URL;
-		}
+            portletURL.setWindowState(getWindowState(request));
+            portletURL.setPortletMode(PortletMode.VIEW);
 
-		if (Validator.isNull(redirect)) {
-			PortletURL portletURL = PortletURLFactoryUtil.create(
-				request, PortletKeys.LOGIN, PortletRequest.RENDER_PHASE);
+            portletURL.setParameter("saveLastPath", "0");
+            portletURL.setParameter("struts_action", "/login/login");
 
-			portletURL.setParameter("saveLastPath", Boolean.FALSE.toString());
-			portletURL.setParameter("mvcRenderCommandName", "/login/login");
-			portletURL.setPortletMode(PortletMode.VIEW);
-			portletURL.setWindowState(getWindowState(request));
+            redirect = portletURL.toString();
+        }
 
-			redirect = portletURL.toString();
-		}
+        if (PropsValues.COMPANY_SECURITY_AUTH_REQUIRES_HTTPS) {
+            String portalURL = PortalUtil.getPortalURL(request);
+            String portalURLSecure = PortalUtil.getPortalURL(request, true);
 
-		if (PropsValues.COMPANY_SECURITY_AUTH_REQUIRES_HTTPS) {
-			String portalURL = PortalUtil.getPortalURL(request);
-			String portalURLSecure = PortalUtil.getPortalURL(request, true);
+            if (!portalURL.equals(portalURLSecure)) {
+                redirect = StringUtil.replaceFirst(
+                        redirect, portalURL, portalURLSecure);
+            }
+        }
 
-			if (!portalURL.equals(portalURLSecure)) {
-				redirect = StringUtil.replaceFirst(
-					redirect, portalURL, portalURLSecure);
-			}
-		}
+        String loginRedirect = ParamUtil.getString(request, "redirect");
 
-		String loginRedirect = ParamUtil.getString(request, "redirect");
+        if (Validator.isNotNull(loginRedirect)) {
+            if (PrefsPropsUtil.getBoolean(
+                    themeDisplay.getCompanyId(), PropsKeys.CAS_AUTH_ENABLED,
+                    PropsValues.CAS_AUTH_ENABLED)) {
 
-		loginRedirect = PortalUtil.escapeRedirect(loginRedirect);
+                redirect = loginRedirect;
+            }
+            else {
+                String loginPortletNamespace = PortalUtil.getPortletNamespace(
+                        PropsValues.AUTH_LOGIN_PORTLET_NAME);
 
-		if (Validator.isNotNull(loginRedirect)) {
-			if (SSOUtil.isRedirectRequired(themeDisplay.getCompanyId())) {
-				redirect = loginRedirect;
-			}
-			else {
-				String loginPortletNamespace = PortalUtil.getPortletNamespace(
-					PropsValues.AUTH_LOGIN_PORTLET_NAME);
+                String loginRedirectParameter =
+                        loginPortletNamespace + "redirect";
 
-				String loginRedirectParameter =
-					loginPortletNamespace + "redirect";
+                redirect = HttpUtil.setParameter(
+                        redirect, "p_p_id", PropsValues.AUTH_LOGIN_PORTLET_NAME);
+                redirect = HttpUtil.setParameter(
+                        redirect, "p_p_lifecycle", "0");
+                redirect = HttpUtil.setParameter(
+                        redirect, loginRedirectParameter, loginRedirect);
+            }
+        }
 
-				redirect = HttpUtil.setParameter(
-					redirect, "p_p_id", PropsValues.AUTH_LOGIN_PORTLET_NAME);
-				redirect = HttpUtil.setParameter(
-					redirect, "p_p_lifecycle", "0");
-				redirect = HttpUtil.setParameter(
-					redirect, loginRedirectParameter, loginRedirect);
-			}
-		}
+        response.sendRedirect(redirect);
 
-		response.sendRedirect(redirect);
+        return null;
+    }
 
-		return null;
-	}
+    protected WindowState getWindowState(HttpServletRequest request) {
+        WindowState windowState = WindowState.MAXIMIZED;
 
-	protected WindowState getWindowState(HttpServletRequest request) {
-		WindowState windowState = WindowState.MAXIMIZED;
+        String windowStateString = ParamUtil.getString(request, "windowState");
 
-		String windowStateString = ParamUtil.getString(request, "windowState");
+        if (Validator.isNotNull(windowStateString)) {
+            windowState = WindowStateFactory.getWindowState(windowStateString);
+        }
 
-		if (Validator.isNotNull(windowStateString)) {
-			windowState = WindowStateFactory.getWindowState(windowStateString);
-		}
-
-		return windowState;
-	}
+        return windowState;
+    }
 
 }

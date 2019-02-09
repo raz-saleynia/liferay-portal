@@ -1,18 +1,54 @@
 <?xml version="1.0"?>
 
 <beans
-	default-destroy-method="destroy"
-	default-init-method="afterPropertiesSet"
-	xmlns="http://www.springframework.org/schema/beans"
-	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd"
->
-	<bean class="com.liferay.portlet.asset.service.impl.AssetCategoryPropertyLocalServiceImpl" id="com.liferay.asset.kernel.service.AssetCategoryPropertyLocalService" />
-	<bean class="com.liferay.portlet.asset.service.impl.AssetCategoryPropertyServiceImpl" id="com.liferay.asset.kernel.service.AssetCategoryPropertyService" />
-	<bean class="com.liferay.portlet.asset.service.persistence.impl.AssetCategoryPropertyPersistenceImpl" id="com.liferay.asset.kernel.service.persistence.AssetCategoryPropertyPersistence" />
-	<bean class="com.liferay.portlet.asset.service.persistence.impl.AssetCategoryPropertyFinderImpl" id="com.liferay.asset.kernel.service.persistence.AssetCategoryPropertyFinder" />
-	<bean class="com.liferay.portlet.asset.service.impl.AssetTagStatsLocalServiceImpl" id="com.liferay.asset.kernel.service.AssetTagStatsLocalService" />
-	<bean class="com.liferay.portlet.asset.service.persistence.impl.AssetTagStatsPersistenceImpl" id="com.liferay.asset.kernel.service.persistence.AssetTagStatsPersistence" />
-	<bean class="com.liferay.portal.service.impl.SubscriptionLocalServiceImpl" id="com.liferay.portal.kernel.service.SubscriptionLocalService" />
-	<bean class="com.liferay.portal.service.persistence.impl.SubscriptionPersistenceImpl" id="com.liferay.portal.kernel.service.persistence.SubscriptionPersistence" />
+        default-destroy-method="destroy"
+        default-init-method="afterPropertiesSet"
+        xmlns="http://www.springframework.org/schema/beans"
+        xmlns:aop="http://www.springframework.org/schema/aop"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.springframework.org/schema/aop http://www.springframework.org/schema/aop/spring-aop-3.0.xsd http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd"
+        >
+
+    <bean id="com.liferay.portlet.dynamicdatamapping.util.DDMXSDUtil" class="com.liferay.portlet.dynamicdatamapping.util.DDMXSDUtil">
+        <property name="DDMXSD">
+            <bean class="com.endplay.portlet.dynamicdatamapping.util.EndplayDDMXSDImpl" />
+        </property>
+    </bean>
+    <bean id="com.liferay.portlet.dynamicdatamapping.util.DDMXMLUtil" class="com.liferay.portlet.dynamicdatamapping.util.DDMXMLUtil">
+        <property name="DDMXML">
+            <bean class="com.endplay.portlet.dynamicdatamapping.util.EndplayDDMXMLImpl" />
+        </property>
+    </bean>
+    <bean id="com.liferay.portal.util.PortalUtil" class="com.liferay.portal.util.PortalUtil">
+		<property name="portal">
+            <bean class="com.endplay.portal.util.ExtPortalImpl" />
+   		</property>
+	</bean>
+	<bean id="com.liferay.portal.kernel.velocity.VelocityVariablesUtil" class="com.liferay.portal.kernel.velocity.VelocityVariablesUtil">
+		<property name="velocityVariables">
+            <bean class="com.endplay.portal.kernel.velocity.ExtVelocityVariablesImpl" />
+   		</property>
+	</bean>
+    <bean id="com.liferay.portlet.asset.service.persistence.AssetCategoryFinder" class="com.endplay.portlet.asset.service.persistence.EndplayAssetCategoryFinderImpl" parent="basePersistence" />
+
+    <bean id="com.liferay.portal.cache.memcached.pool.MemcachedClientPool"
+          class="com.liferay.portal.cache.memcached.ExtDefaultMemcachedClientFactory"></bean>
+
+    <bean id="com.liferay.portal.cache.memcached.MemcachePortalCacheManager" class="com.liferay.portal.cache.memcached.ExtMemcachePortalCacheManager">
+        <property name="memcachedClientPool" ref="com.liferay.portal.cache.memcached.pool.MemcachedClientPool" />
+        <property name="timeout" value="1500" />
+        <property name="timeoutTimeUnit" value="MILLISECONDS" />
+    </bean>
+
+    <bean id="com.liferay.portal.cache.redis.RedisPortalCacheManager" class="com.liferay.portal.cache.redis.ExtRedisPortalCacheManager"/>
+
+
+    <bean id="com.endplay.portal.cache.external.ExternalCachePool" class="com.endplay.portal.cache.external.ExternalCachePoolImpl" init-method="startPortalCacheManager">
+        <property name="memcachedPortalCacheManager" ref="com.liferay.portal.cache.memcached.MemcachePortalCacheManager" />
+        <property name="redisPortalCacheManager" ref="com.liferay.portal.cache.redis.RedisPortalCacheManager" />
+    </bean>
+
+    <bean id="com.endplay.portal.cache.external.ExternalCachePoolUtil" class="com.endplay.portal.cache.external.ExternalCachePoolUtil">
+        <property name="externalCachePool" ref="com.endplay.portal.cache.external.ExternalCachePool" />
+    </bean>
 </beans>

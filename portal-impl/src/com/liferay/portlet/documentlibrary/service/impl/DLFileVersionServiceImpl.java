@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,15 +14,12 @@
 
 package com.liferay.portlet.documentlibrary.service.impl;
 
-import com.liferay.document.library.kernel.model.DLFileVersion;
 import com.liferay.portal.kernel.exception.PortalException;
-import com.liferay.portal.kernel.repository.model.FileEntry;
-import com.liferay.portal.kernel.security.permission.ActionKeys;
-import com.liferay.portal.kernel.security.permission.resource.ModelResourcePermission;
-import com.liferay.portal.kernel.security.permission.resource.ModelResourcePermissionFactory;
+import com.liferay.portal.kernel.exception.SystemException;
+import com.liferay.portal.security.permission.ActionKeys;
+import com.liferay.portlet.documentlibrary.model.DLFileVersion;
 import com.liferay.portlet.documentlibrary.service.base.DLFileVersionServiceBaseImpl;
-
-import java.util.List;
+import com.liferay.portlet.documentlibrary.service.permission.DLFileEntryPermission;
 
 /**
  * @author Brian Wing Shun Chan
@@ -31,12 +28,12 @@ public class DLFileVersionServiceImpl extends DLFileVersionServiceBaseImpl {
 
 	@Override
 	public DLFileVersion getFileVersion(long fileVersionId)
-		throws PortalException {
+		throws PortalException, SystemException {
 
 		DLFileVersion fileVersion = dlFileVersionLocalService.getFileVersion(
 			fileVersionId);
 
-		_fileEntryModelResourcePermission.check(
+		DLFileEntryPermission.check(
 			getPermissionChecker(), fileVersion.getFileEntryId(),
 			ActionKeys.VIEW);
 
@@ -44,52 +41,11 @@ public class DLFileVersionServiceImpl extends DLFileVersionServiceBaseImpl {
 	}
 
 	@Override
-	public List<DLFileVersion> getFileVersions(long fileEntryId, int status)
-		throws PortalException {
-
-		_fileEntryModelResourcePermission.check(
-			getPermissionChecker(), fileEntryId, ActionKeys.VIEW);
-
-		return dlFileVersionLocalService.getFileVersions(fileEntryId, status);
-	}
-
-	@Override
-	public int getFileVersionsCount(long fileEntryId, int status)
-		throws PortalException {
-
-		_fileEntryModelResourcePermission.check(
-			getPermissionChecker(), fileEntryId, ActionKeys.VIEW);
-
-		return dlFileVersionPersistence.countByF_S(fileEntryId, status);
-	}
-
-	@Override
 	public DLFileVersion getLatestFileVersion(long fileEntryId)
-		throws PortalException {
-
-		_fileEntryModelResourcePermission.check(
-			getPermissionChecker(), fileEntryId, ActionKeys.VIEW);
+		throws PortalException, SystemException {
 
 		return dlFileVersionLocalService.getLatestFileVersion(
 			getGuestOrUserId(), fileEntryId);
 	}
-
-	@Override
-	public DLFileVersion getLatestFileVersion(
-			long fileEntryId, boolean excludeWorkingCopy)
-		throws PortalException {
-
-		_fileEntryModelResourcePermission.check(
-			getPermissionChecker(), fileEntryId, ActionKeys.VIEW);
-
-		return dlFileVersionLocalService.getLatestFileVersion(
-			fileEntryId, excludeWorkingCopy);
-	}
-
-	private static volatile ModelResourcePermission<FileEntry>
-		_fileEntryModelResourcePermission =
-			ModelResourcePermissionFactory.getInstance(
-				DLFileVersionServiceImpl.class,
-				"_fileEntryModelResourcePermission", FileEntry.class);
 
 }

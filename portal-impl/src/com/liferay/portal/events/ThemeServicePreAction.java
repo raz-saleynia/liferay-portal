@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,18 +14,23 @@
 
 package com.liferay.portal.events;
 
+import com.endplay.portlet.epdata.media.configuration.ConfigurationPropertyUtil;
 import com.liferay.portal.kernel.events.Action;
 import com.liferay.portal.kernel.events.ActionException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.model.ColorScheme;
-import com.liferay.portal.kernel.model.Layout;
-import com.liferay.portal.kernel.model.Theme;
-import com.liferay.portal.kernel.service.ThemeLocalServiceUtil;
-import com.liferay.portal.kernel.theme.ThemeDisplay;
-import com.liferay.portal.kernel.util.ColorSchemeFactoryUtil;
-import com.liferay.portal.kernel.util.ThemeFactoryUtil;
-import com.liferay.portal.kernel.util.WebKeys;
+import com.liferay.portal.kernel.servlet.BrowserSnifferUtil;
+import com.liferay.portal.model.ColorScheme;
+import com.liferay.portal.model.Group;
+import com.liferay.portal.model.Layout;
+import com.liferay.portal.model.Theme;
+import com.liferay.portal.model.impl.ColorSchemeImpl;
+import com.liferay.portal.model.impl.ThemeImpl;
+import com.liferay.portal.service.GroupLocalServiceUtil;
+import com.liferay.portal.service.ThemeLocalServiceUtil;
+import com.liferay.portal.theme.ThemeDisplay;
+import com.liferay.portal.util.PortalUtil;
+import com.liferay.portal.util.WebKeys;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -34,6 +39,8 @@ import javax.servlet.http.HttpServletResponse;
  * @author Edward Han
  */
 public class ThemeServicePreAction extends Action {
+	
+	private final String WAP_THEME_CHECK_DISABLED = "wap.theme.check.disabled";
 
 	@Override
 	public void run(HttpServletRequest request, HttpServletResponse response)
@@ -55,6 +62,7 @@ public class ThemeServicePreAction extends Action {
 			WebKeys.THEME_DISPLAY);
 
 		Theme theme = themeDisplay.getTheme();
+		ColorScheme colorScheme = themeDisplay.getColorScheme();
 
 		if (theme != null) {
 			if (_log.isInfoEnabled()) {
@@ -64,33 +72,75 @@ public class ThemeServicePreAction extends Action {
 			return;
 		}
 
-		ColorScheme colorScheme = themeDisplay.getColorScheme();
 		Layout layout = themeDisplay.getLayout();
 
+		//Never render with wap theme by default
+		boolean wapTheme = false;
+		
+		//check wap theme if the feature is enabled
+		if(!isWapThemeCheckDisabled(request)){
+			wapTheme = BrowserSnifferUtil.isWap(request);
+		}
+
 		if (layout != null) {
-			theme = layout.getTheme();
-			colorScheme = layout.getColorScheme();
+			if (wapTheme) {
+				theme = layout.getWapTheme();
+				colorScheme = layout.getWapColorScheme();
+			}
+			else {
+				theme = layout.getTheme();
+				colorScheme = layout.getColorScheme();
+			}
 		}
 		else {
-			String themeId = ThemeFactoryUtil.getDefaultRegularThemeId(
-				themeDisplay.getCompanyId());
-			String colorSchemeId =
-				ColorSchemeFactoryUtil.getDefaultRegularColorSchemeId();
+			String themeId = null;
+			String colorSchemeId = null;
+
+			if (wapTheme) {
+				themeId = ThemeImpl.getDefaultWapThemeId(
+					themeDisplay.getCompanyId());
+				colorSchemeId = ColorSchemeImpl.getDefaultWapColorSchemeId();
+			}
+			else {
+				themeId = ThemeImpl.getDefaultRegularThemeId(
+					themeDisplay.getCompanyId());
+				colorSchemeId =
+					ColorSchemeImpl.getDefaultRegularColorSchemeId();
+			}
 
 			theme = ThemeLocalServiceUtil.getTheme(
-				themeDisplay.getCompanyId(), themeId);
-
+				themeDisplay.getCompanyId(), themeId, wapTheme);
 			colorScheme = ThemeLocalServiceUtil.getColorScheme(
-				themeDisplay.getCompanyId(), theme.getThemeId(), colorSchemeId);
+				themeDisplay.getCompanyId(), theme.getThemeId(), colorSchemeId,
+				wapTheme);
 		}
 
-		request.setAttribute(WebKeys.COLOR_SCHEME, colorScheme);
 		request.setAttribute(WebKeys.THEME, theme);
+		request.setAttribute(WebKeys.COLOR_SCHEME, colorScheme);
 
 		themeDisplay.setLookAndFeel(theme, colorScheme);
 	}
+	
+	private boolean isWapThemeCheckDisabled(HttpServletRequest request)
+	{
+		Boolean isWapThemeCheckDisabled = null;
+		
+		try {
+			long groupId = PortalUtil.getScopeGroupId(request);
+			Group group = GroupLocalServiceUtil.getGroup(groupId);
+			isWapThemeCheckDisabled = ConfigurationPropertyUtil.getInstance().getBoolean(group.getCompanyId(), groupId, WAP_THEME_CHECK_DISABLED);
+		} catch (Exception e) {
+			_log.error("Failed to get global config:" + WAP_THEME_CHECK_DISABLED + ": " + e);
+		}
+		
+		if (isWapThemeCheckDisabled == null) {
+			_log.warn("The configuration value " + WAP_THEME_CHECK_DISABLED + " has not been set -- defaulting to FALSE");
+			return false;
+		}
+		return isWapThemeCheckDisabled.booleanValue();
+	}
 
-	private static final Log _log = LogFactoryUtil.getLog(
+	private static Log _log = LogFactoryUtil.getLog(
 		ThemeServicePreAction.class);
 
 }

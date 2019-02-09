@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,14 +14,21 @@
 
 package com.liferay.portal.model.impl;
 
-import com.liferay.document.library.kernel.model.DLFileEntry;
-import com.liferay.document.library.kernel.service.DLFileEntryLocalServiceUtil;
-import com.liferay.document.library.kernel.store.DLStoreUtil;
-import com.liferay.petra.string.StringPool;
+import com.endplay.portlet.documentlibrary.store.StoreConstants;
+import com.endplay.portlet.documentlibrary.store.tools.ImageToolUtil;
+import com.endplay.portlet.documentlibrary.util.DocumentLibraryDataUtil;
+import com.liferay.portal.kernel.exception.SystemException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.util.FileUtil;
-import com.liferay.portal.util.PropsValues;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.model.Company;
+import com.liferay.portal.model.Group;
+import com.liferay.portal.security.auth.CompanyThreadLocal;
+import com.liferay.portal.service.CompanyLocalServiceUtil;
+import com.liferay.portal.service.GroupLocalServiceUtil;
+import com.liferay.portlet.documentlibrary.model.DLFileEntry;
+import com.liferay.portlet.documentlibrary.service.DLFileEntryLocalServiceUtil;
+import com.liferay.portlet.documentlibrary.store.DLStoreUtil;
 
 import java.io.InputStream;
 
@@ -30,7 +37,9 @@ import java.io.InputStream;
  */
 public class ImageImpl extends ImageBaseImpl {
 
-	@Override
+	public ImageImpl() {
+	}
+
 	public byte[] getTextObj() {
 		if (_textObj != null) {
 			return _textObj;
@@ -39,13 +48,8 @@ public class ImageImpl extends ImageBaseImpl {
 		long imageId = getImageId();
 
 		try {
-			DLFileEntry dlFileEntry = null;
-
-			if (PropsValues.WEB_SERVER_SERVLET_CHECK_IMAGE_GALLERY) {
-				dlFileEntry =
-					DLFileEntryLocalServiceUtil.fetchFileEntryByAnyImageId(
-						imageId);
-			}
+			DLFileEntry dlFileEntry =
+				DLFileEntryLocalServiceUtil.fetchFileEntryByAnyImageId(imageId);
 
 			InputStream is = null;
 
@@ -57,8 +61,35 @@ public class ImageImpl extends ImageBaseImpl {
 					dlFileEntry.getDataRepositoryId(), dlFileEntry.getName());
 			}
 			else {
-				is = DLStoreUtil.getFileAsStream(
-					_DEFAULT_COMPANY_ID, _DEFAULT_REPOSITORY_ID, getFileName());
+				if (DocumentLibraryDataUtil.isRemoteStoreEnabled())
+				{
+					 Long companyId = CompanyThreadLocal.getCompanyId();
+					 if(companyId == null || companyId == 0){
+					 	String companyIdStr = PropsUtil.get(PropsKeys.COMPANY_DEFAULT_WEB_ID);
+					 	Company company = CompanyLocalServiceUtil.getCompanyByWebId(companyIdStr);
+					 	if(company != null){
+					 		companyId = company.getCompanyId();
+					 	}
+					 }
+					Group globalGroup = GroupLocalServiceUtil.getCompanyGroup(companyId);
+					
+					String mimeType = ImageToolUtil.detect(getFileName());
+					
+					String fileName = null;
+					try {
+						fileName = DocumentLibraryDataUtil.getCdnSubDirectoryPath(companyId,globalGroup.getGroupId(),mimeType) + StoreConstants.PATH_SEPARATOR +  StoreConstants.DEFAULT_IMAGE_FOLDER + StoreConstants.PATH_SEPARATOR +  getFileName();
+					} catch (Exception e) {
+						throw new SystemException(e);
+					}
+					
+					is = DLStoreUtil.getFileAsStream(
+							companyId, globalGroup.getGroupId(), fileName);
+				}
+				else
+				{
+					is = DLStoreUtil.getFileAsStream(
+							_DEFAULT_COMPANY_ID, _DEFAULT_REPOSITORY_ID, getFileName());
+				}
 			}
 
 			byte[] bytes = FileUtil.getBytes(is);
@@ -72,9 +103,10 @@ public class ImageImpl extends ImageBaseImpl {
 		return _textObj;
 	}
 
-	@Override
 	public void setTextObj(byte[] textObj) {
 		_textObj = textObj;
+
+		super.setText(Base64.objectToString(textObj));
 	}
 
 	protected String getFileName() {
@@ -85,7 +117,7 @@ public class ImageImpl extends ImageBaseImpl {
 
 	private static final long _DEFAULT_REPOSITORY_ID = 0;
 
-	private static final Log _log = LogFactoryUtil.getLog(ImageImpl.class);
+	private static Log _log = LogFactoryUtil.getLog(ImageImpl.class);
 
 	private byte[] _textObj;
 

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,253 +14,86 @@
 
 package com.liferay.portal.util;
 
-import com.liferay.petra.nio.CharsetEncoderUtil;
-import com.liferay.petra.string.CharPool;
-import com.liferay.petra.string.StringPool;
-import com.liferay.portal.kernel.spring.osgi.OSGiBeanProperties;
-import com.liferay.portal.kernel.util.FriendlyURLNormalizer;
-import com.liferay.portal.kernel.util.HttpUtil;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
+import com.liferay.portal.kernel.util.*;
 import com.liferay.util.Normalizer;
 
-import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.charset.CharsetEncoder;
-
 import java.util.Arrays;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * @author Brian Wing Shun Chan
  * @author Shuyang Zhou
  */
-@OSGiBeanProperties(property = "service.ranking:Integer=100")
-public class FriendlyURLNormalizerImpl implements FriendlyURLNormalizer {
+public class FriendlyURLNormalizerImpl implements FriendlyURLNormalizer{
 
-	@Override
 	public String normalize(String friendlyURL) {
-		return normalize(friendlyURL, false);
+		return normalize(friendlyURL, null);
 	}
 
-	/**
-	 * @deprecated As of Wilberforce (7.0.x), with no direct replacement
-	 */
-	@Deprecated
-	@Override
-	public String normalize(String friendlyURL, Pattern friendlyURLPattern) {
+	public String normalize(String friendlyURL, char[] replaceChars) {
 		if (Validator.isNull(friendlyURL)) {
 			return friendlyURL;
 		}
 
-		friendlyURL = StringUtil.toLowerCase(friendlyURL);
-		friendlyURL = Normalizer.normalizeToAscii(friendlyURL);
+		friendlyURL = GetterUtil.getString(friendlyURL);
+		friendlyURL = friendlyURL.toLowerCase();
 
-		Matcher matcher = friendlyURLPattern.matcher(friendlyURL);
+		StringBuilder sb = null;
 
-		friendlyURL = matcher.replaceAll(StringPool.DASH);
-
-		StringBuilder sb = new StringBuilder(friendlyURL.length());
+		int index = 0;
 
 		for (int i = 0; i < friendlyURL.length(); i++) {
 			char c = friendlyURL.charAt(i);
 
-			if (c == CharPool.DASH) {
-				if ((i == 0) || (CharPool.DASH != sb.charAt(sb.length() - 1))) {
-					sb.append(CharPool.DASH);
-				}
-			}
-			else {
-				sb.append(c);
-			}
-		}
+			if ((Arrays.binarySearch(_REPLACE_CHARS, c) >= 0) ||
+				((replaceChars != null) &&
+				 ArrayUtil.contains(replaceChars, c))) {
 
-		if (sb.length() == friendlyURL.length()) {
-			return friendlyURL;
-		}
-
-		return sb.toString();
-	}
-
-	@Override
-	public String normalizeWithEncoding(String friendlyURL) {
-		if (Validator.isNull(friendlyURL)) {
-			return friendlyURL;
-		}
-
-		String decodedFriendlyURL = HttpUtil.decodePath(friendlyURL);
-
-		StringBuilder sb = new StringBuilder(decodedFriendlyURL.length());
-
-		boolean modified = false;
-
-		ByteBuffer byteBuffer = null;
-		CharBuffer charBuffer = null;
-
-		CharsetEncoder charsetEncoder = null;
-
-		for (int i = 0; i < decodedFriendlyURL.length(); i++) {
-			char c = decodedFriendlyURL.charAt(i);
-
-			if ((CharPool.UPPER_CASE_A <= c) && (c <= CharPool.UPPER_CASE_Z)) {
-				sb.append((char)(c + 32));
-
-				modified = true;
-			}
-			else if (((CharPool.LOWER_CASE_A <= c) &&
-					  (c <= CharPool.LOWER_CASE_Z)) ||
-					 ((CharPool.NUMBER_0 <= c) && (c <= CharPool.NUMBER_9)) ||
-					 (c == CharPool.PERIOD) || (c == CharPool.SLASH) ||
-					 (c == CharPool.STAR) || (c == CharPool.UNDERLINE)) {
-
-				sb.append(c);
-			}
-			else if (Arrays.binarySearch(_REPLACE_CHARS, c) >= 0) {
-				if ((i == 0) || (CharPool.DASH != sb.charAt(sb.length() - 1))) {
-					sb.append(CharPool.DASH);
-
-					if (c != CharPool.DASH) {
-						modified = true;
-					}
-				}
-				else {
-					modified = true;
-				}
-			}
-			else {
-				if (charsetEncoder == null) {
-					charsetEncoder = CharsetEncoderUtil.getCharsetEncoder(
-						StringPool.UTF8);
-
-					byteBuffer = ByteBuffer.allocate(4);
-					charBuffer = CharBuffer.allocate(2);
-				}
-				else {
-					byteBuffer.clear();
-					charBuffer.clear();
+				if (sb == null) {
+					sb = new StringBuilder();
 				}
 
-				charBuffer.put(c);
-
-				boolean endOfInput = false;
-
-				if ((decodedFriendlyURL.length() - 1) == i) {
-					endOfInput = true;
+				if (i > index) {
+					sb.append(friendlyURL.substring(index, i));
 				}
 
-				if (Character.isHighSurrogate(c) &&
-					((i + 1) < decodedFriendlyURL.length())) {
+				sb.append(CharPool.DASH);
 
-					c = decodedFriendlyURL.charAt(i + 1);
-
-					if (Character.isLowSurrogate(c)) {
-						charBuffer.put(c);
-
-						i++;
-					}
-					else {
-						endOfInput = true;
-					}
-				}
-
-				charBuffer.flip();
-
-				charsetEncoder.encode(charBuffer, byteBuffer, endOfInput);
-
-				byteBuffer.flip();
-
-				while (byteBuffer.hasRemaining()) {
-					byte b = byteBuffer.get();
-
-					sb.append(CharPool.PERCENT);
-					sb.append(_HEX_DIGITS[(b >> 4) & 0x0F]);
-					sb.append(_HEX_DIGITS[b & 0x0F]);
-				}
-
-				if (endOfInput) {
-					charsetEncoder.flush(byteBuffer);
-
-					charsetEncoder.reset();
-				}
-
-				modified = true;
+				index = i + 1;
 			}
 		}
 
-		if (modified) {
-			return sb.toString();
+		if (sb != null) {
+			if (index < friendlyURL.length()) {
+				sb.append(friendlyURL.substring(index));
+			}
+
+			friendlyURL = sb.toString();
 		}
 
-		return friendlyURL;
-	}
-
-	@Override
-	public String normalizeWithPeriodsAndSlashes(String friendlyURL) {
-		return normalize(friendlyURL, true);
-	}
-
-	protected String normalize(String friendlyURL, boolean periodsAndSlashes) {
-		if (Validator.isNull(friendlyURL)) {
-			return friendlyURL;
+		while (friendlyURL.indexOf(StringPool.DOUBLE_DASH) >= 0) {
+			friendlyURL = StringUtil.replace(
+				friendlyURL, StringPool.DOUBLE_DASH, StringPool.DASH);
 		}
 
 		friendlyURL = Normalizer.normalizeToAscii(friendlyURL);
 
-		StringBuilder sb = new StringBuilder(friendlyURL.length());
-
-		boolean modified = false;
-
-		for (int i = 0; i < friendlyURL.length(); i++) {
-			char c = friendlyURL.charAt(i);
-
-			if ((CharPool.UPPER_CASE_A <= c) && (c <= CharPool.UPPER_CASE_Z)) {
-				sb.append((char)(c + 32));
-
-				modified = true;
-			}
-			else if (((CharPool.LOWER_CASE_A <= c) &&
-					  (c <= CharPool.LOWER_CASE_Z)) ||
-					 ((CharPool.NUMBER_0 <= c) && (c <= CharPool.NUMBER_9)) ||
-					 (c == CharPool.UNDERLINE) ||
-					 (!periodsAndSlashes &&
-					  ((c == CharPool.SLASH) || (c == CharPool.PERIOD)))) {
-
-				sb.append(c);
-			}
-			else {
-				if ((i == 0) || (CharPool.DASH != sb.charAt(sb.length() - 1))) {
-					sb.append(CharPool.DASH);
-
-					if (c != CharPool.DASH) {
-						modified = true;
-					}
-				}
-				else {
-					modified = true;
-				}
-			}
+		/*if (friendlyURL.startsWith(StringPool.DASH)) {
+			friendlyURL = friendlyURL.substring(1, friendlyURL.length());
 		}
 
-		if (modified) {
-			return sb.toString();
-		}
+		if (friendlyURL.endsWith(StringPool.DASH)) {
+			friendlyURL = friendlyURL.substring(0, friendlyURL.length() - 1);
+		}*/
 
 		return friendlyURL;
 	}
-
-	private static final char[] _HEX_DIGITS = {
-		'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D',
-		'E', 'F'
-	};
 
 	private static final char[] _REPLACE_CHARS;
 
 	static {
-		char[] replaceChars = {
-			'-', ' ', ',', '\\', '\'', '\"', '(', ')', '[', ']', '{', '}', '?',
-			'#', '@', '+', '~', ';', '$', '!', '=', ':', '&', '\u00a3',
-			'\u2013', '\u2014', '\u2018', '\u2019', '\u201c', '\u201d'
+		char[] replaceChars = new char[] {
+			' ', ',', '\\', '\'', '\"', '(', ')', '{', '}', '?', '#', '@', '+',
+			'~', ';', '$', '%', '!', '=', ':', '&', '<', '>', '^', '[', ']', '|', '`'
 		};
 
 		Arrays.sort(replaceChars);

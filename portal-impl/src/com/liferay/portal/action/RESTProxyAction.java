@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,39 +14,35 @@
 
 package com.liferay.portal.action;
 
-import com.liferay.petra.string.CharPool;
-import com.liferay.petra.string.StringPool;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
 import com.liferay.portal.kernel.servlet.ServletResponseUtil;
-import com.liferay.portal.kernel.util.ContentTypes;
-import com.liferay.portal.kernel.util.Http;
-import com.liferay.portal.kernel.util.HttpUtil;
-import com.liferay.portal.kernel.util.ParamUtil;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
-import com.liferay.portal.struts.Action;
-import com.liferay.portal.struts.model.ActionForward;
-import com.liferay.portal.struts.model.ActionMapping;
+import com.liferay.portal.kernel.util.*;
 import com.liferay.portal.util.PropsValues;
+import org.apache.struts.action.Action;
+import org.apache.struts.action.ActionForm;
+import org.apache.struts.action.ActionForward;
+import org.apache.struts.action.ActionMapping;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.util.Enumeration;
 
 /**
  * @author David Truong
  * @author Gavin Wan
  * @author Samuel Kong
  */
-public class RESTProxyAction implements Action {
+public class RESTProxyAction extends Action {
 
 	@Override
 	public ActionForward execute(
-			ActionMapping actionMapping, HttpServletRequest request,
-			HttpServletResponse response)
-		throws Exception {
+			ActionMapping actionMapping, ActionForm actionForm,
+			HttpServletRequest request, HttpServletResponse response)
+			throws Exception {
 
 		String url = ParamUtil.getString(request, "url");
+		String type = ParamUtil.getString(request, "type", "get");
 
 		if (!validate(url)) {
 			return null;
@@ -54,21 +50,38 @@ public class RESTProxyAction implements Action {
 
 		Http.Options options = new Http.Options();
 
-		int pos = url.indexOf(CharPool.QUESTION);
-
-		if (pos != -1) {
+		if (type.equalsIgnoreCase("post")) {
+		
+			int pos = url.indexOf(CharPool.QUESTION);
+			
+			Enumeration paramNames = request.getParameterNames();
+			
+			String paramName = null;
+			StringBuilder params = new StringBuilder();
+			
+			while (paramNames.hasMoreElements()) {
+				paramName = (String) paramNames.nextElement();
+				if (!(paramName.equals("url") || paramName.equals("type") || paramName.equals("dataType"))) {
+					params.append(paramName + "="
+									 + request.getParameter(paramName));
+					if (paramNames.hasMoreElements()) {
+						params = params.append("&");
+					}
+				}
+			}
+	
 			options.setBody(
-				url.substring(pos + 1),
+				params.toString(),
 				ContentTypes.APPLICATION_X_WWW_FORM_URLENCODED,
 				StringPool.UTF8);
 			options.setLocation(url.substring(0, pos));
+			options.setLocation(url);	
+			options.setPost(true);
 		}
 		else {
 			options.setLocation(url);
 		}
-
-		options.setPost(true);
-
+		
 		String content = HttpUtil.URLtoString(options);
 
 		ServletResponseUtil.write(response, content);
@@ -98,7 +111,6 @@ public class RESTProxyAction implements Action {
 		return false;
 	}
 
-	private static final Log _log = LogFactoryUtil.getLog(
-		RESTProxyAction.class);
+	private static Log _log = LogFactoryUtil.getLog(RESTProxyAction.class);
 
 }

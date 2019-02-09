@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,57 +14,39 @@
 
 package com.liferay.portlet.asset.service.persistence.impl;
 
-import aQute.bnd.annotation.ProviderType;
-
-import com.liferay.asset.kernel.exception.NoSuchEntryException;
-import com.liferay.asset.kernel.model.AssetEntry;
-import com.liferay.asset.kernel.service.persistence.AssetCategoryPersistence;
-import com.liferay.asset.kernel.service.persistence.AssetEntryPersistence;
-import com.liferay.asset.kernel.service.persistence.AssetTagPersistence;
-
-import com.liferay.petra.string.StringBundler;
-
+import com.endplay.portal.cache.GroupPartitionID;
+import com.endplay.portal.cache.PartitionFinderCacheUtil;
+import com.endplay.portal.cache.PartitionFinderPath;
+import com.liferay.portal.NoSuchModelException;
 import com.liferay.portal.kernel.bean.BeanReference;
-import com.liferay.portal.kernel.dao.orm.EntityCache;
-import com.liferay.portal.kernel.dao.orm.EntityCacheUtil;
-import com.liferay.portal.kernel.dao.orm.FinderCacheUtil;
-import com.liferay.portal.kernel.dao.orm.FinderPath;
-import com.liferay.portal.kernel.dao.orm.Query;
-import com.liferay.portal.kernel.dao.orm.QueryPos;
-import com.liferay.portal.kernel.dao.orm.QueryUtil;
-import com.liferay.portal.kernel.dao.orm.Session;
+import com.liferay.portal.kernel.cache.CacheRegistryUtil;
+import com.liferay.portal.kernel.dao.jdbc.*;
+import com.liferay.portal.kernel.dao.orm.*;
+import com.liferay.portal.kernel.exception.SystemException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.service.ServiceContext;
-import com.liferay.portal.kernel.service.ServiceContextThreadLocal;
-import com.liferay.portal.kernel.service.persistence.CompanyProvider;
-import com.liferay.portal.kernel.service.persistence.CompanyProviderWrapper;
-import com.liferay.portal.kernel.service.persistence.impl.BasePersistenceImpl;
-import com.liferay.portal.kernel.service.persistence.impl.TableMapper;
-import com.liferay.portal.kernel.service.persistence.impl.TableMapperFactory;
-import com.liferay.portal.kernel.util.ArrayUtil;
-import com.liferay.portal.kernel.util.ListUtil;
-import com.liferay.portal.kernel.util.OrderByComparator;
-import com.liferay.portal.kernel.util.ProxyUtil;
-import com.liferay.portal.kernel.util.SetUtil;
-import com.liferay.portal.kernel.util.StringUtil;
-
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.model.CacheModel;
+import com.liferay.portal.model.ModelListener;
+import com.liferay.portal.service.persistence.*;
+import com.liferay.portal.service.persistence.impl.BasePersistenceImpl;
+import com.liferay.portlet.asset.NoSuchEntryException;
+import com.liferay.portlet.asset.model.AssetEntry;
 import com.liferay.portlet.asset.model.impl.AssetEntryImpl;
 import com.liferay.portlet.asset.model.impl.AssetEntryModelImpl;
+import com.liferay.portlet.blogs.service.persistence.BlogsEntryPersistence;
+import com.liferay.portlet.bookmarks.service.persistence.BookmarksEntryPersistence;
+import com.liferay.portlet.documentlibrary.service.persistence.DLFileEntryPersistence;
+import com.liferay.portlet.documentlibrary.service.persistence.DLFolderPersistence;
+import com.liferay.portlet.journal.service.persistence.JournalArticlePersistence;
+import com.liferay.portlet.journal.service.persistence.JournalArticleResourcePersistence;
+import com.liferay.portlet.messageboards.service.persistence.MBMessagePersistence;
+import com.liferay.portlet.social.service.persistence.SocialActivityPersistence;
+import com.liferay.portlet.wiki.service.persistence.WikiPagePersistence;
+import com.liferay.portlet.wiki.service.persistence.WikiPageResourcePersistence;
 
 import java.io.Serializable;
-
-import java.lang.reflect.InvocationHandler;
-
-import java.sql.Timestamp;
-
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 /**
  * The persistence implementation for the asset entry service.
@@ -75,12 +57,11 @@ import java.util.Set;
  *
  * @author Brian Wing Shun Chan
  * @see AssetEntryPersistence
- * @see com.liferay.asset.kernel.service.persistence.AssetEntryUtil
+ * @see AssetEntryUtil
  * @generated
  */
-@ProviderType
 public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
-	implements AssetEntryPersistence {
+		implements AssetEntryPersistence {
 	/*
 	 * NOTE FOR DEVELOPERS:
 	 *
@@ -88,316 +69,417 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 */
 	public static final String FINDER_CLASS_NAME_ENTITY = AssetEntryImpl.class.getName();
 	public static final String FINDER_CLASS_NAME_LIST_WITH_PAGINATION = FINDER_CLASS_NAME_ENTITY +
-		".List1";
+			".List1";
 	public static final String FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION = FINDER_CLASS_NAME_ENTITY +
-		".List2";
-	private FinderPath _finderPathWithPaginationFindAll;
-	private FinderPath _finderPathWithoutPaginationFindAll;
-	private FinderPath _finderPathCountAll;
-	private FinderPath _finderPathWithPaginationFindByGroupId;
-	private FinderPath _finderPathWithoutPaginationFindByGroupId;
-	private FinderPath _finderPathCountByGroupId;
-
+			".List2";
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_BY_COMPANYID =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByCompanyId",
+					new String[] {
+							Long.class.getName(),
+							
+							"java.lang.Integer", "java.lang.Integer",
+							"com.liferay.portal.kernel.util.OrderByComparator"
+					});
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_COMPANYID =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByCompanyId",
+					new String[] { Long.class.getName() },
+					AssetEntryModelImpl.COMPANYID_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_COMPANYID = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByCompanyId",
+			new String[] { Long.class.getName() });
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_BY_VISIBLE = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+			FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByVisible",
+			new String[] {
+					Boolean.class.getName(),
+					
+					"java.lang.Integer", "java.lang.Integer",
+					"com.liferay.portal.kernel.util.OrderByComparator"
+			});
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_VISIBLE =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByVisible",
+					new String[] { Boolean.class.getName() },
+					AssetEntryModelImpl.VISIBLE_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_VISIBLE = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByVisible",
+			new String[] { Boolean.class.getName() });
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_BY_PUBLISHDATE =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByPublishDate",
+					new String[] {
+							Date.class.getName(),
+							
+							"java.lang.Integer", "java.lang.Integer",
+							"com.liferay.portal.kernel.util.OrderByComparator"
+					});
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_PUBLISHDATE =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByPublishDate",
+					new String[] { Date.class.getName() },
+					AssetEntryModelImpl.PUBLISHDATE_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_PUBLISHDATE = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByPublishDate",
+			new String[] { Date.class.getName() });
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_BY_EXPIRATIONDATE =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByExpirationDate",
+					new String[] {
+							Date.class.getName(),
+							
+							"java.lang.Integer", "java.lang.Integer",
+							"com.liferay.portal.kernel.util.OrderByComparator"
+					});
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_EXPIRATIONDATE =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByExpirationDate",
+					new String[] { Date.class.getName() },
+					AssetEntryModelImpl.EXPIRATIONDATE_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_EXPIRATIONDATE = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByExpirationDate",
+			new String[] { Date.class.getName() });
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_BY_LAYOUTUUID =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByLayoutUuid",
+					new String[] {
+							String.class.getName(),
+							
+							"java.lang.Integer", "java.lang.Integer",
+							"com.liferay.portal.kernel.util.OrderByComparator"
+					});
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_LAYOUTUUID =
+			new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+					FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByLayoutUuid",
+					new String[] { String.class.getName() },
+					AssetEntryModelImpl.LAYOUTUUID_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_LAYOUTUUID = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByLayoutUuid",
+			new String[] { String.class.getName() });
+	public static final PartitionFinderPath FINDER_PATH_FETCH_BY_G_CU = new PartitionFinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+			FINDER_CLASS_NAME_ENTITY, "fetchByG_CU",
+			new String[] { Long.class.getName(), String.class.getName() },
+			AssetEntryModelImpl.GROUPID_COLUMN_BITMASK |
+					AssetEntryModelImpl.CLASSUUID_COLUMN_BITMASK);
+	public static final PartitionFinderPath FINDER_PATH_COUNT_BY_G_CU = new PartitionFinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByG_CU",
+			new String[] { Long.class.getName(), String.class.getName() });
+	public static final FinderPath FINDER_PATH_FETCH_BY_C_C = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+			FINDER_CLASS_NAME_ENTITY, "fetchByC_C",
+			new String[] { Long.class.getName(), Long.class.getName() },
+			AssetEntryModelImpl.CLASSNAMEID_COLUMN_BITMASK |
+					AssetEntryModelImpl.CLASSPK_COLUMN_BITMASK);
+	public static final FinderPath FINDER_PATH_COUNT_BY_C_C = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByC_C",
+			new String[] { Long.class.getName(), Long.class.getName() });
+	public static final FinderPath FINDER_PATH_WITH_PAGINATION_FIND_ALL = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+			FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findAll", new String[0]);
+	public static final FinderPath FINDER_PATH_WITHOUT_PAGINATION_FIND_ALL = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findAll", new String[0]);
+	public static final FinderPath FINDER_PATH_COUNT_ALL = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
+			FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countAll", new String[0]);
+	
 	/**
-	 * Returns all the asset entries where groupId = &#63;.
+	 * Caches the asset entry in the entity cache if it is enabled.
 	 *
-	 * @param groupId the group ID
-	 * @return the matching asset entries
+	 * @param assetEntry the asset entry
 	 */
-	@Override
-	public List<AssetEntry> findByGroupId(long groupId) {
-		return findByGroupId(groupId, QueryUtil.ALL_POS, QueryUtil.ALL_POS, null);
+	public void cacheResult(AssetEntry assetEntry) {
+		EntityCacheUtil.putResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+				AssetEntryImpl.class, assetEntry.getPrimaryKey(), assetEntry);
+		
+		GroupPartitionID partId = new GroupPartitionID(assetEntry.getGroupId());
+		
+		PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_FETCH_BY_G_CU,
+				new Object[] {
+						Long.valueOf(assetEntry.getGroupId()),
+						
+						assetEntry.getClassUuid()
+				}, assetEntry);
+		
+		FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_C_C,
+				new Object[] {
+						Long.valueOf(assetEntry.getClassNameId()),
+						Long.valueOf(assetEntry.getClassPK())
+				}, assetEntry);
+		
+		assetEntry.resetOriginalValues();
 	}
-
+	
 	/**
-	 * Returns a range of all the asset entries where groupId = &#63;.
+	 * Caches the asset entries in the entity cache if it is enabled.
 	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @return the range of matching asset entries
+	 * @param assetEntries the asset entries
 	 */
-	@Override
-	public List<AssetEntry> findByGroupId(long groupId, int start, int end) {
-		return findByGroupId(groupId, start, end, null);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByGroupId(long groupId, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findByGroupId(groupId, start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByGroupId(long groupId, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
-		FinderPath finderPath = null;
-		Object[] finderArgs = null;
-
-		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
-				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByGroupId;
-			finderArgs = new Object[] { groupId };
-		}
-		else {
-			finderPath = _finderPathWithPaginationFindByGroupId;
-			finderArgs = new Object[] { groupId, start, end, orderByComparator };
-		}
-
-		List<AssetEntry> list = null;
-
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
-
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if ((groupId != assetEntry.getGroupId())) {
-						list = null;
-
-						break;
-					}
-				}
-			}
-		}
-
-		if (list == null) {
-			StringBundler query = null;
-
-			if (orderByComparator != null) {
-				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+	public void cacheResult(List<AssetEntry> assetEntries) {
+		for (AssetEntry assetEntry : assetEntries) {
+			if (EntityCacheUtil.getResult(
+					AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryImpl.class, assetEntry.getPrimaryKey()) == null) {
+				cacheResult(assetEntry);
 			}
 			else {
-				query = new StringBundler(3);
-			}
-
-			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_GROUPID_GROUPID_2);
-
-			if (orderByComparator != null) {
-				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
+				assetEntry.resetOriginalValues();
 			}
 		}
-
-		return list;
 	}
-
+	
 	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63;.
+	 * Clears the cache for all asset entries.
 	 *
-	 * @param groupId the group ID
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * <p>
+	 * The {@link com.liferay.portal.kernel.dao.orm.EntityCache} and {@link com.liferay.portal.kernel.dao.orm.FinderCache} are both cleared by this method.
+	 * </p>
 	 */
 	@Override
-	public AssetEntry findByGroupId_First(long groupId,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByGroupId_First(groupId, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
+	public void clearCache() {
+		if (_HIBERNATE_CACHE_USE_SECOND_LEVEL_CACHE) {
+			CacheRegistryUtil.clear(AssetEntryImpl.class.getName());
 		}
-
-		StringBundler msg = new StringBundler(4);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
+		
+		EntityCacheUtil.clearCache(AssetEntryImpl.class.getName());
+		
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_ENTITY);
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+		
+		PartitionFinderCacheUtil.clearAllCaches(FINDER_CLASS_NAME_ENTITY);
+		PartitionFinderCacheUtil.clearAllCaches(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		PartitionFinderCacheUtil.clearAllCaches(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
 	}
-
+	
 	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63;.
+	 * Clears the cache for the asset entry.
 	 *
-	 * @param groupId the group ID
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * <p>
+	 * The {@link com.liferay.portal.kernel.dao.orm.EntityCache} and {@link com.liferay.portal.kernel.dao.orm.FinderCache} are both cleared by this method.
+	 * </p>
 	 */
 	@Override
-	public AssetEntry fetchByGroupId_First(long groupId,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		List<AssetEntry> list = findByGroupId(groupId, 0, 1, orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
+	public void clearCache(AssetEntry assetEntry) {
+		EntityCacheUtil.removeResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+				AssetEntryImpl.class, assetEntry.getPrimaryKey());
+		
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+		
+		GroupPartitionID partId = new GroupPartitionID(assetEntry.getGroupId());
+		
+		PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+		
+		clearUniqueFindersCache(assetEntry);
 	}
-
+	
+	@Override
+	public void clearCache(List<AssetEntry> assetEntries) {
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+		
+		HashSet<Long> groupIds = new HashSet<Long>();
+		
+		for (int i=0; i<assetEntries.size(); i++) {
+			Long groupId = assetEntries.get(i).getGroupId();
+			
+			if (!groupIds.contains(groupId)) {
+				GroupPartitionID partId = new GroupPartitionID(groupId);
+				PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+				PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+				
+				groupIds.add(groupId);
+			}
+		}
+		
+		for (AssetEntry assetEntry : assetEntries) {
+			EntityCacheUtil.removeResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+					AssetEntryImpl.class, assetEntry.getPrimaryKey());
+			
+			clearUniqueFindersCache(assetEntry);
+		}
+	}
+	
+	protected void cacheUniqueFindersCache(AssetEntry assetEntry) {
+		if (assetEntry.isNew()) {
+			Object[] args = new Object[] {
+					Long.valueOf(assetEntry.getGroupId()),
+					
+					assetEntry.getClassUuid()
+			};
+			
+			FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_G_CU, args,
+					Long.valueOf(1));
+			FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_G_CU, args,
+					assetEntry);
+			
+			args = new Object[] {
+					Long.valueOf(assetEntry.getClassNameId()),
+					Long.valueOf(assetEntry.getClassPK())
+			};
+			
+			FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_C_C, args,
+					Long.valueOf(1));
+			FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_C_C, args, assetEntry);
+		}
+		else {
+			AssetEntryModelImpl assetEntryModelImpl = (AssetEntryModelImpl)assetEntry;
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_FETCH_BY_G_CU.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						Long.valueOf(assetEntry.getGroupId()),
+						
+						assetEntry.getClassUuid()
+				};
+				
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_G_CU, args,
+						Long.valueOf(1));
+				FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_G_CU, args,
+						assetEntry);
+			}
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_FETCH_BY_C_C.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						Long.valueOf(assetEntry.getClassNameId()),
+						Long.valueOf(assetEntry.getClassPK())
+				};
+				
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_C_C, args,
+						Long.valueOf(1));
+				FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_C_C, args,
+						assetEntry);
+			}
+		}
+	}
+	
+	protected void clearUniqueFindersCache(AssetEntry assetEntry) {
+		AssetEntryModelImpl assetEntryModelImpl = (AssetEntryModelImpl)assetEntry;
+		
+		GroupPartitionID partId = new GroupPartitionID(assetEntry.getGroupId());
+		
+		Object[] args = new Object[] {
+				Long.valueOf(assetEntry.getGroupId()),
+				
+				assetEntry.getClassUuid()
+		};
+		
+		PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_COUNT_BY_G_CU, args);
+		PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_FETCH_BY_G_CU, args);
+		
+		if ((assetEntryModelImpl.getColumnBitmask() &
+				FINDER_PATH_FETCH_BY_G_CU.getColumnBitmask()) != 0) {
+			args = new Object[] {
+					Long.valueOf(assetEntryModelImpl.getOriginalGroupId()),
+					
+					assetEntryModelImpl.getOriginalClassUuid()
+			};
+			
+			PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_COUNT_BY_G_CU, args);
+			PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_FETCH_BY_G_CU, args);
+		}
+		
+		args = new Object[] {
+				Long.valueOf(assetEntry.getClassNameId()),
+				Long.valueOf(assetEntry.getClassPK())
+		};
+		
+		FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_C_C, args);
+		FinderCacheUtil.removeResult(FINDER_PATH_FETCH_BY_C_C, args);
+		
+		if ((assetEntryModelImpl.getColumnBitmask() &
+				FINDER_PATH_FETCH_BY_C_C.getColumnBitmask()) != 0) {
+			args = new Object[] {
+					Long.valueOf(assetEntryModelImpl.getOriginalClassNameId()),
+					Long.valueOf(assetEntryModelImpl.getOriginalClassPK())
+			};
+			
+			FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_C_C, args);
+			FinderCacheUtil.removeResult(FINDER_PATH_FETCH_BY_C_C, args);
+		}
+	}
+	
 	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63;.
+	 * Creates a new asset entry with the primary key. Does not add the asset entry to the database.
 	 *
-	 * @param groupId the group ID
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @param entryId the primary key for the new asset entry
+	 * @return the new asset entry
+	 */
+	public AssetEntry create(long entryId) {
+		AssetEntry assetEntry = new AssetEntryImpl();
+		
+		assetEntry.setNew(true);
+		assetEntry.setPrimaryKey(entryId);
+		
+		return assetEntry;
+	}
+	
+	/**
+	 * Removes the asset entry with the primary key from the database. Also notifies the appropriate model listeners.
+	 *
+	 * @param entryId the primary key of the asset entry
+	 * @return the asset entry that was removed
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
+	 */
+	public AssetEntry remove(long entryId)
+			throws NoSuchEntryException, SystemException {
+		return remove(Long.valueOf(entryId));
+	}
+	
+	/**
+	 * Removes the asset entry with the primary key from the database. Also notifies the appropriate model listeners.
+	 *
+	 * @param primaryKey the primary key of the asset entry
+	 * @return the asset entry that was removed
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
 	@Override
-	public AssetEntry findByGroupId_Last(long groupId,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByGroupId_Last(groupId, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
-		}
-
-		StringBundler msg = new StringBundler(4);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
-	}
-
-	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry fetchByGroupId_Last(long groupId,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		int count = countByGroupId(groupId);
-
-		if (count == 0) {
-			return null;
-		}
-
-		List<AssetEntry> list = findByGroupId(groupId, count - 1, count,
-				orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns the asset entries before and after the current asset entry in the ordered set where groupId = &#63;.
-	 *
-	 * @param entryId the primary key of the current asset entry
-	 * @param groupId the group ID
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry[] findByGroupId_PrevAndNext(long entryId, long groupId,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = findByPrimaryKey(entryId);
-
+	public AssetEntry remove(Serializable primaryKey)
+			throws NoSuchEntryException, SystemException {
 		Session session = null;
-
+		
 		try {
 			session = openSession();
-
-			AssetEntry[] array = new AssetEntryImpl[3];
-
-			array[0] = getByGroupId_PrevAndNext(session, assetEntry, groupId,
-					orderByComparator, true);
-
-			array[1] = assetEntry;
-
-			array[2] = getByGroupId_PrevAndNext(session, assetEntry, groupId,
-					orderByComparator, false);
-
-			return array;
+			
+			AssetEntry assetEntry = (AssetEntry)session.get(AssetEntryImpl.class,
+					primaryKey);
+			
+			if (assetEntry == null) {
+				if (_log.isWarnEnabled()) {
+					_log.warn(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY + primaryKey);
+				}
+				
+				throw new NoSuchEntryException(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY +
+						primaryKey);
+			}
+			
+			return remove(assetEntry);
+		}
+		catch (NoSuchEntryException nsee) {
+			throw nsee;
 		}
 		catch (Exception e) {
 			throw processException(e);
@@ -406,208 +488,363 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 			closeSession(session);
 		}
 	}
-
-	protected AssetEntry getByGroupId_PrevAndNext(Session session,
-		AssetEntry assetEntry, long groupId,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
-		StringBundler query = null;
-
-		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+	
+	@Override
+	protected AssetEntry removeImpl(AssetEntry assetEntry)
+			throws SystemException {
+		assetEntry = toUnwrappedModel(assetEntry);
+		
+		GroupPartitionID partId = new GroupPartitionID(assetEntry.getGroupId());
+		
+		try {
+			clearAssetCategories.clear(assetEntry.getPrimaryKey());
 		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			PartitionFinderCacheUtil.clearCache(partId, AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
+		
+		try {
+			clearAssetTags.clear(assetEntry.getPrimaryKey());
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			PartitionFinderCacheUtil.clearCache(partId, AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
+		
+		Session session = null;
+		
+		try {
+			session = openSession();
+			
+			BatchSessionUtil.delete(session, assetEntry);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			closeSession(session);
+		}
+		
+		clearCache(assetEntry);
+		
+		return assetEntry;
+	}
+	
+	@Override
+	public AssetEntry updateImpl(
+			com.liferay.portlet.asset.model.AssetEntry assetEntry, boolean merge)
+			throws SystemException {
+		assetEntry = toUnwrappedModel(assetEntry);
+		
+		boolean isNew = assetEntry.isNew();
+		
+		AssetEntryModelImpl assetEntryModelImpl = (AssetEntryModelImpl)assetEntry;
+		
+		Session session = null;
+		
+		try {
+			session = openSession();
+			
+			BatchSessionUtil.update(session, assetEntry, merge);
+			
+			assetEntry.setNew(false);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			closeSession(session);
+		}
+		
+		GroupPartitionID partId = new GroupPartitionID(assetEntry.getGroupId());
+		
+		PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
+		
+		if (isNew || !AssetEntryModelImpl.COLUMN_BITMASK_ENABLED) {
+			PartitionFinderCacheUtil.clearCache(partId, FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+			FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
+		}
+		
 		else {
-			query = new StringBundler(3);
-		}
-
-		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-		query.append(_FINDER_COLUMN_GROUPID_GROUPID_2);
-
-		if (orderByComparator != null) {
-			String[] orderByConditionFields = orderByComparator.getOrderByConditionFields();
-
-			if (orderByConditionFields.length > 0) {
-				query.append(WHERE_AND);
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_COMPANYID.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						Long.valueOf(assetEntryModelImpl.getOriginalCompanyId())
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_COMPANYID,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_COMPANYID,
+						args);
+				
+				args = new Object[] {
+						Long.valueOf(assetEntryModelImpl.getCompanyId())
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_COMPANYID,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_COMPANYID,
+						args);
 			}
-
-			for (int i = 0; i < orderByConditionFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByConditionFields[i]);
-
-				if ((i + 1) < orderByConditionFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN_HAS_NEXT);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN);
-					}
-				}
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_VISIBLE.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						Boolean.valueOf(assetEntryModelImpl.getOriginalVisible())
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_VISIBLE, args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_VISIBLE,
+						args);
+				
+				args = new Object[] {
+						Boolean.valueOf(assetEntryModelImpl.getVisible())
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_VISIBLE, args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_VISIBLE,
+						args);
 			}
-
-			query.append(ORDER_BY_CLAUSE);
-
-			String[] orderByFields = orderByComparator.getOrderByFields();
-
-			for (int i = 0; i < orderByFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByFields[i]);
-
-				if ((i + 1) < orderByFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC_HAS_NEXT);
-					}
-					else {
-						query.append(ORDER_BY_DESC_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC);
-					}
-					else {
-						query.append(ORDER_BY_DESC);
-					}
-				}
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_PUBLISHDATE.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						assetEntryModelImpl.getOriginalPublishDate()
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_PUBLISHDATE,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_PUBLISHDATE,
+						args);
+				
+				args = new Object[] { assetEntryModelImpl.getPublishDate() };
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_PUBLISHDATE,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_PUBLISHDATE,
+						args);
+			}
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_EXPIRATIONDATE.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						assetEntryModelImpl.getOriginalExpirationDate()
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_EXPIRATIONDATE,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_EXPIRATIONDATE,
+						args);
+				
+				args = new Object[] { assetEntryModelImpl.getExpirationDate() };
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_EXPIRATIONDATE,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_EXPIRATIONDATE,
+						args);
+			}
+			
+			if ((assetEntryModelImpl.getColumnBitmask() &
+					FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_LAYOUTUUID.getColumnBitmask()) != 0) {
+				Object[] args = new Object[] {
+						assetEntryModelImpl.getOriginalLayoutUuid()
+				};
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_LAYOUTUUID,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_LAYOUTUUID,
+						args);
+				
+				args = new Object[] { assetEntryModelImpl.getLayoutUuid() };
+				
+				FinderCacheUtil.removeResult(FINDER_PATH_COUNT_BY_LAYOUTUUID,
+						args);
+				FinderCacheUtil.removeResult(FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_LAYOUTUUID,
+						args);
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+		
+		EntityCacheUtil.putResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+				AssetEntryImpl.class, assetEntry.getPrimaryKey(), assetEntry);
+		
+		clearUniqueFindersCache(assetEntry);
+		cacheUniqueFindersCache(assetEntry);
+		
+		return assetEntry;
+	}
+	
+	protected AssetEntry toUnwrappedModel(AssetEntry assetEntry) {
+		if (assetEntry instanceof AssetEntryImpl) {
+			return assetEntry;
 		}
-
-		String sql = query.toString();
-
-		Query q = session.createQuery(sql);
-
-		q.setFirstResult(0);
-		q.setMaxResults(2);
-
-		QueryPos qPos = QueryPos.getInstance(q);
-
-		qPos.add(groupId);
-
-		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+		
+		AssetEntryImpl assetEntryImpl = new AssetEntryImpl();
+		
+		assetEntryImpl.setNew(assetEntry.isNew());
+		assetEntryImpl.setPrimaryKey(assetEntry.getPrimaryKey());
+		
+		assetEntryImpl.setEntryId(assetEntry.getEntryId());
+		assetEntryImpl.setGroupId(assetEntry.getGroupId());
+		assetEntryImpl.setCompanyId(assetEntry.getCompanyId());
+		assetEntryImpl.setUserId(assetEntry.getUserId());
+		assetEntryImpl.setUserName(assetEntry.getUserName());
+		assetEntryImpl.setCreateDate(assetEntry.getCreateDate());
+		assetEntryImpl.setModifiedDate(assetEntry.getModifiedDate());
+		assetEntryImpl.setClassNameId(assetEntry.getClassNameId());
+		assetEntryImpl.setClassPK(assetEntry.getClassPK());
+		assetEntryImpl.setClassUuid(assetEntry.getClassUuid());
+		assetEntryImpl.setClassTypeId(assetEntry.getClassTypeId());
+		assetEntryImpl.setVisible(assetEntry.isVisible());
+		assetEntryImpl.setStartDate(assetEntry.getStartDate());
+		assetEntryImpl.setEndDate(assetEntry.getEndDate());
+		assetEntryImpl.setPublishDate(assetEntry.getPublishDate());
+		assetEntryImpl.setExpirationDate(assetEntry.getExpirationDate());
+		assetEntryImpl.setMimeType(assetEntry.getMimeType());
+		assetEntryImpl.setTitle(assetEntry.getTitle());
+		assetEntryImpl.setDescription(assetEntry.getDescription());
+		assetEntryImpl.setSummary(assetEntry.getSummary());
+		assetEntryImpl.setUrl(assetEntry.getUrl());
+		assetEntryImpl.setLayoutUuid(assetEntry.getLayoutUuid());
+		assetEntryImpl.setHeight(assetEntry.getHeight());
+		assetEntryImpl.setWidth(assetEntry.getWidth());
+		assetEntryImpl.setPriority(assetEntry.getPriority());
+		assetEntryImpl.setViewCount(assetEntry.getViewCount());
+		
+		return assetEntryImpl;
+	}
+	
+	/**
+	 * Returns the asset entry with the primary key or throws a {@link com.liferay.portal.NoSuchModelException} if it could not be found.
+	 *
+	 * @param primaryKey the primary key of the asset entry
+	 * @return the asset entry
+	 * @throws com.liferay.portal.NoSuchModelException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
+	 */
+	@Override
+	public AssetEntry findByPrimaryKey(Serializable primaryKey)
+			throws NoSuchModelException, SystemException {
+		return findByPrimaryKey(((Long)primaryKey).longValue());
+	}
+	
+	/**
+	 * Returns the asset entry with the primary key or throws a {@link com.liferay.portlet.asset.NoSuchEntryException} if it could not be found.
+	 *
+	 * @param entryId the primary key of the asset entry
+	 * @return the asset entry
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
+	 */
+	public AssetEntry findByPrimaryKey(long entryId)
+			throws NoSuchEntryException, SystemException {
+		AssetEntry assetEntry = fetchByPrimaryKey(entryId);
+		
+		if (assetEntry == null) {
+			if (_log.isWarnEnabled()) {
+				_log.warn(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY + entryId);
 			}
+			
+			throw new NoSuchEntryException(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY +
+					entryId);
 		}
-
-		List<AssetEntry> list = q.list();
-
-		if (list.size() == 2) {
-			return list.get(1);
-		}
-		else {
+		
+		return assetEntry;
+	}
+	
+	/**
+	 * Returns the asset entry with the primary key or returns <code>null</code> if it could not be found.
+	 *
+	 * @param primaryKey the primary key of the asset entry
+	 * @return the asset entry, or <code>null</code> if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
+	 */
+	@Override
+	public AssetEntry fetchByPrimaryKey(Serializable primaryKey)
+			throws SystemException {
+		return fetchByPrimaryKey(((Long)primaryKey).longValue());
+	}
+	
+	/**
+	 * Returns the asset entry with the primary key or returns <code>null</code> if it could not be found.
+	 *
+	 * @param entryId the primary key of the asset entry
+	 * @return the asset entry, or <code>null</code> if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
+	 */
+	public AssetEntry fetchByPrimaryKey(long entryId) throws SystemException {
+		AssetEntry assetEntry = (AssetEntry)EntityCacheUtil.getResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+				AssetEntryImpl.class, entryId);
+		
+		if (assetEntry == _nullAssetEntry) {
 			return null;
 		}
-	}
-
-	/**
-	 * Removes all the asset entries where groupId = &#63; from the database.
-	 *
-	 * @param groupId the group ID
-	 */
-	@Override
-	public void removeByGroupId(long groupId) {
-		for (AssetEntry assetEntry : findByGroupId(groupId, QueryUtil.ALL_POS,
-				QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where groupId = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByGroupId(long groupId) {
-		FinderPath finderPath = _finderPathCountByGroupId;
-
-		Object[] finderArgs = new Object[] { groupId };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_GROUPID_GROUPID_2);
-
-			String sql = query.toString();
-
+		
+		if (assetEntry == null) {
 			Session session = null;
-
+			
+			boolean hasException = false;
+			
 			try {
 				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
+				
+				assetEntry = (AssetEntry)session.get(AssetEntryImpl.class,
+						Long.valueOf(entryId));
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
+				hasException = true;
+				
 				throw processException(e);
 			}
 			finally {
+				if (assetEntry != null) {
+					cacheResult(assetEntry);
+				}
+				else if (!hasException) {
+					EntityCacheUtil.putResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
+							AssetEntryImpl.class, entryId, _nullAssetEntry);
+				}
+				
 				closeSession(session);
 			}
 		}
-
-		return count.intValue();
+		
+		return assetEntry;
 	}
-
-	private static final String _FINDER_COLUMN_GROUPID_GROUPID_2 = "assetEntry.groupId = ?";
-	private FinderPath _finderPathWithPaginationFindByCompanyId;
-	private FinderPath _finderPathWithoutPaginationFindByCompanyId;
-	private FinderPath _finderPathCountByCompanyId;
-
+	
 	/**
 	 * Returns all the asset entries where companyId = &#63;.
 	 *
 	 * @param companyId the company ID
 	 * @return the matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByCompanyId(long companyId) {
+	public List<AssetEntry> findByCompanyId(long companyId)
+			throws SystemException {
 		return findByCompanyId(companyId, QueryUtil.ALL_POS, QueryUtil.ALL_POS,
-			null);
+				null);
 	}
-
+	
 	/**
 	 * Returns a range of all the asset entries where companyId = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param companyId the company ID
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByCompanyId(long companyId, int start, int end) {
+	public List<AssetEntry> findByCompanyId(long companyId, int start, int end)
+			throws SystemException {
 		return findByCompanyId(companyId, start, end, null);
 	}
 
@@ -615,7 +852,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns an ordered range of all the asset entries where companyId = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param companyId the company ID
@@ -623,59 +860,32 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByCompanyId(long companyId, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findByCompanyId(companyId, start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where companyId = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param companyId the company ID
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByCompanyId(long companyId, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
+											OrderByComparator orderByComparator) throws SystemException {
 		FinderPath finderPath = null;
 		Object[] finderArgs = null;
 
 		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
 				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByCompanyId;
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_COMPANYID;
 			finderArgs = new Object[] { companyId };
 		}
 		else {
-			finderPath = _finderPathWithPaginationFindByCompanyId;
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_BY_COMPANYID;
 			finderArgs = new Object[] { companyId, start, end, orderByComparator };
 		}
 
-		List<AssetEntry> list = null;
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
 
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
+		if ((list != null) && !list.isEmpty()) {
+			for (AssetEntry assetEntry : list) {
+				if ((companyId != assetEntry.getCompanyId())) {
+					list = null;
 
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if ((companyId != assetEntry.getCompanyId())) {
-						list = null;
-
-						break;
-					}
+					break;
 				}
 			}
 		}
@@ -685,10 +895,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+						(orderByComparator.getOrderByFields().length * 3));
 			}
 			else {
-				query = new StringBundler(3);
+				query = new StringBundler(2);
 			}
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
@@ -697,11 +907,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+						orderByComparator);
 			}
 
 			String sql = query.toString();
@@ -717,29 +923,22 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				qPos.add(companyId);
 
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				list = (List<AssetEntry>)QueryUtil.list(q, getDialect(), start,
+						end);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
@@ -753,12 +952,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param companyId the company ID
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByCompanyId_First(long companyId,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+											OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByCompanyId_First(companyId,
 				orderByComparator);
 
@@ -773,7 +972,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("companyId=");
 		msg.append(companyId);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -784,10 +983,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param companyId the company ID
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByCompanyId_First(long companyId,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											 OrderByComparator orderByComparator) throws SystemException {
 		List<AssetEntry> list = findByCompanyId(companyId, 0, 1,
 				orderByComparator);
 
@@ -804,12 +1003,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param companyId the company ID
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByCompanyId_Last(long companyId,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+										   OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByCompanyId_Last(companyId,
 				orderByComparator);
 
@@ -824,7 +1023,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("companyId=");
 		msg.append(companyId);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -835,15 +1034,11 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param companyId the company ID
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByCompanyId_Last(long companyId,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											OrderByComparator orderByComparator) throws SystemException {
 		int count = countByCompanyId(companyId);
-
-		if (count == 0) {
-			return null;
-		}
 
 		List<AssetEntry> list = findByCompanyId(companyId, count - 1, count,
 				orderByComparator);
@@ -862,12 +1057,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param companyId the company ID
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry[] findByCompanyId_PrevAndNext(long entryId,
-		long companyId, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+													long companyId, OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByPrimaryKey(entryId);
 
 		Session session = null;
@@ -896,14 +1091,13 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	protected AssetEntry getByCompanyId_PrevAndNext(Session session,
-		AssetEntry assetEntry, long companyId,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
+													AssetEntry assetEntry, long companyId,
+													OrderByComparator orderByComparator, boolean previous) {
 		StringBundler query = null;
 
 		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+			query = new StringBundler(6 +
+					(orderByComparator.getOrderByFields().length * 6));
 		}
 		else {
 			query = new StringBundler(3);
@@ -968,9 +1162,6 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				}
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
 
 		String sql = query.toString();
 
@@ -984,9 +1175,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		qPos.add(companyId);
 
 		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+			Object[] values = orderByComparator.getOrderByConditionValues(assetEntry);
+
+			for (Object value : values) {
+				qPos.add(value);
 			}
 		}
 
@@ -1001,83 +1193,14 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	/**
-	 * Removes all the asset entries where companyId = &#63; from the database.
-	 *
-	 * @param companyId the company ID
-	 */
-	@Override
-	public void removeByCompanyId(long companyId) {
-		for (AssetEntry assetEntry : findByCompanyId(companyId,
-				QueryUtil.ALL_POS, QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where companyId = &#63;.
-	 *
-	 * @param companyId the company ID
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByCompanyId(long companyId) {
-		FinderPath finderPath = _finderPathCountByCompanyId;
-
-		Object[] finderArgs = new Object[] { companyId };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_COMPANYID_COMPANYID_2);
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(companyId);
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_COMPANYID_COMPANYID_2 = "assetEntry.companyId = ?";
-	private FinderPath _finderPathWithPaginationFindByVisible;
-	private FinderPath _finderPathWithoutPaginationFindByVisible;
-	private FinderPath _finderPathCountByVisible;
-
-	/**
 	 * Returns all the asset entries where visible = &#63;.
 	 *
 	 * @param visible the visible
 	 * @return the matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByVisible(boolean visible) {
+	public List<AssetEntry> findByVisible(boolean visible)
+			throws SystemException {
 		return findByVisible(visible, QueryUtil.ALL_POS, QueryUtil.ALL_POS, null);
 	}
 
@@ -1085,16 +1208,17 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns a range of all the asset entries where visible = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param visible the visible
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByVisible(boolean visible, int start, int end) {
+	public List<AssetEntry> findByVisible(boolean visible, int start, int end)
+			throws SystemException {
 		return findByVisible(visible, start, end, null);
 	}
 
@@ -1102,7 +1226,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns an ordered range of all the asset entries where visible = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param visible the visible
@@ -1110,59 +1234,32 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByVisible(boolean visible, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findByVisible(visible, start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where visible = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param visible the visible
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByVisible(boolean visible, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
+										  OrderByComparator orderByComparator) throws SystemException {
 		FinderPath finderPath = null;
 		Object[] finderArgs = null;
 
 		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
 				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByVisible;
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_VISIBLE;
 			finderArgs = new Object[] { visible };
 		}
 		else {
-			finderPath = _finderPathWithPaginationFindByVisible;
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_BY_VISIBLE;
 			finderArgs = new Object[] { visible, start, end, orderByComparator };
 		}
 
-		List<AssetEntry> list = null;
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
 
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
+		if ((list != null) && !list.isEmpty()) {
+			for (AssetEntry assetEntry : list) {
+				if ((visible != assetEntry.getVisible())) {
+					list = null;
 
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if ((visible != assetEntry.isVisible())) {
-						list = null;
-
-						break;
-					}
+					break;
 				}
 			}
 		}
@@ -1172,10 +1269,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+						(orderByComparator.getOrderByFields().length * 3));
 			}
 			else {
-				query = new StringBundler(3);
+				query = new StringBundler(2);
 			}
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
@@ -1184,11 +1281,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+						orderByComparator);
 			}
 
 			String sql = query.toString();
@@ -1204,29 +1297,22 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				qPos.add(visible);
 
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				list = (List<AssetEntry>)QueryUtil.list(q, getDialect(), start,
+						end);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
@@ -1240,12 +1326,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param visible the visible
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByVisible_First(boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+										  OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByVisible_First(visible, orderByComparator);
 
 		if (assetEntry != null) {
@@ -1259,7 +1345,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("visible=");
 		msg.append(visible);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -1270,10 +1356,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param visible the visible
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByVisible_First(boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator) {
+										   OrderByComparator orderByComparator) throws SystemException {
 		List<AssetEntry> list = findByVisible(visible, 0, 1, orderByComparator);
 
 		if (!list.isEmpty()) {
@@ -1289,12 +1375,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param visible the visible
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByVisible_Last(boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+										 OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByVisible_Last(visible, orderByComparator);
 
 		if (assetEntry != null) {
@@ -1308,7 +1394,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("visible=");
 		msg.append(visible);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -1319,15 +1405,11 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param visible the visible
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByVisible_Last(boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator) {
+										  OrderByComparator orderByComparator) throws SystemException {
 		int count = countByVisible(visible);
-
-		if (count == 0) {
-			return null;
-		}
 
 		List<AssetEntry> list = findByVisible(visible, count - 1, count,
 				orderByComparator);
@@ -1346,12 +1428,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param visible the visible
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry[] findByVisible_PrevAndNext(long entryId,
-		boolean visible, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+												  boolean visible, OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByPrimaryKey(entryId);
 
 		Session session = null;
@@ -1380,14 +1462,13 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	protected AssetEntry getByVisible_PrevAndNext(Session session,
-		AssetEntry assetEntry, boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
+												  AssetEntry assetEntry, boolean visible,
+												  OrderByComparator orderByComparator, boolean previous) {
 		StringBundler query = null;
 
 		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+			query = new StringBundler(6 +
+					(orderByComparator.getOrderByFields().length * 6));
 		}
 		else {
 			query = new StringBundler(3);
@@ -1452,9 +1533,6 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				}
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
 
 		String sql = query.toString();
 
@@ -1468,9 +1546,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		qPos.add(visible);
 
 		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+			Object[] values = orderByComparator.getOrderByConditionValues(assetEntry);
+
+			for (Object value : values) {
+				qPos.add(value);
 			}
 		}
 
@@ -1485,102 +1564,33 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	/**
-	 * Removes all the asset entries where visible = &#63; from the database.
-	 *
-	 * @param visible the visible
-	 */
-	@Override
-	public void removeByVisible(boolean visible) {
-		for (AssetEntry assetEntry : findByVisible(visible, QueryUtil.ALL_POS,
-				QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where visible = &#63;.
-	 *
-	 * @param visible the visible
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByVisible(boolean visible) {
-		FinderPath finderPath = _finderPathCountByVisible;
-
-		Object[] finderArgs = new Object[] { visible };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_VISIBLE_VISIBLE_2);
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(visible);
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_VISIBLE_VISIBLE_2 = "assetEntry.visible = ?";
-	private FinderPath _finderPathWithPaginationFindByPublishDate;
-	private FinderPath _finderPathWithoutPaginationFindByPublishDate;
-	private FinderPath _finderPathCountByPublishDate;
-
-	/**
 	 * Returns all the asset entries where publishDate = &#63;.
 	 *
 	 * @param publishDate the publish date
 	 * @return the matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByPublishDate(Date publishDate) {
+	public List<AssetEntry> findByPublishDate(Date publishDate)
+			throws SystemException {
 		return findByPublishDate(publishDate, QueryUtil.ALL_POS,
-			QueryUtil.ALL_POS, null);
+				QueryUtil.ALL_POS, null);
 	}
 
 	/**
 	 * Returns a range of all the asset entries where publishDate = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param publishDate the publish date
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByPublishDate(Date publishDate, int start,
-		int end) {
+											  int end) throws SystemException {
 		return findByPublishDate(publishDate, start, end, null);
 	}
 
@@ -1588,7 +1598,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns an ordered range of all the asset entries where publishDate = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param publishDate the publish date
@@ -1596,64 +1606,32 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByPublishDate(Date publishDate, int start,
-		int end, OrderByComparator<AssetEntry> orderByComparator) {
-		return findByPublishDate(publishDate, start, end, orderByComparator,
-			true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where publishDate = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param publishDate the publish date
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByPublishDate(Date publishDate, int start,
-		int end, OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
+											  int end, OrderByComparator orderByComparator) throws SystemException {
 		FinderPath finderPath = null;
 		Object[] finderArgs = null;
 
 		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
 				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByPublishDate;
-			finderArgs = new Object[] { _getTime(publishDate) };
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_PUBLISHDATE;
+			finderArgs = new Object[] { publishDate };
 		}
 		else {
-			finderPath = _finderPathWithPaginationFindByPublishDate;
-			finderArgs = new Object[] {
-					_getTime(publishDate),
-					
-					start, end, orderByComparator
-				};
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_BY_PUBLISHDATE;
+			finderArgs = new Object[] { publishDate, start, end, orderByComparator };
 		}
 
-		List<AssetEntry> list = null;
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
 
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
+		if ((list != null) && !list.isEmpty()) {
+			for (AssetEntry assetEntry : list) {
+				if (!Validator.equals(publishDate, assetEntry.getPublishDate())) {
+					list = null;
 
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if (!Objects.equals(publishDate, assetEntry.getPublishDate())) {
-						list = null;
-
-						break;
-					}
+					break;
 				}
 			}
 		}
@@ -1663,32 +1641,24 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+						(orderByComparator.getOrderByFields().length * 3));
 			}
 			else {
-				query = new StringBundler(3);
+				query = new StringBundler(2);
 			}
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-			boolean bindPublishDate = false;
 
 			if (publishDate == null) {
 				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1);
 			}
 			else {
-				bindPublishDate = true;
-
 				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2);
 			}
 
 			if (orderByComparator != null) {
 				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+						orderByComparator);
 			}
 
 			String sql = query.toString();
@@ -1702,33 +1672,26 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				QueryPos qPos = QueryPos.getInstance(q);
 
-				if (bindPublishDate) {
-					qPos.add(new Timestamp(publishDate.getTime()));
+				if (publishDate != null) {
+					qPos.add(CalendarUtil.getTimestamp(publishDate));
 				}
 
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				list = (List<AssetEntry>)QueryUtil.list(q, getDialect(), start,
+						end);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
@@ -1742,12 +1705,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param publishDate the publish date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByPublishDate_First(Date publishDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+											  OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByPublishDate_First(publishDate,
 				orderByComparator);
 
@@ -1762,7 +1725,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("publishDate=");
 		msg.append(publishDate);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -1773,10 +1736,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param publishDate the publish date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByPublishDate_First(Date publishDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											   OrderByComparator orderByComparator) throws SystemException {
 		List<AssetEntry> list = findByPublishDate(publishDate, 0, 1,
 				orderByComparator);
 
@@ -1793,12 +1756,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param publishDate the publish date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByPublishDate_Last(Date publishDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+											 OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByPublishDate_Last(publishDate,
 				orderByComparator);
 
@@ -1813,7 +1776,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("publishDate=");
 		msg.append(publishDate);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -1824,15 +1787,11 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param publishDate the publish date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByPublishDate_Last(Date publishDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											  OrderByComparator orderByComparator) throws SystemException {
 		int count = countByPublishDate(publishDate);
-
-		if (count == 0) {
-			return null;
-		}
 
 		List<AssetEntry> list = findByPublishDate(publishDate, count - 1,
 				count, orderByComparator);
@@ -1851,12 +1810,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param publishDate the publish date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry[] findByPublishDate_PrevAndNext(long entryId,
-		Date publishDate, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+													  Date publishDate, OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByPrimaryKey(entryId);
 
 		Session session = null;
@@ -1885,14 +1844,13 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	protected AssetEntry getByPublishDate_PrevAndNext(Session session,
-		AssetEntry assetEntry, Date publishDate,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
+													  AssetEntry assetEntry, Date publishDate,
+													  OrderByComparator orderByComparator, boolean previous) {
 		StringBundler query = null;
 
 		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+			query = new StringBundler(6 +
+					(orderByComparator.getOrderByFields().length * 6));
 		}
 		else {
 			query = new StringBundler(3);
@@ -1900,14 +1858,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
-		boolean bindPublishDate = false;
-
 		if (publishDate == null) {
 			query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1);
 		}
 		else {
-			bindPublishDate = true;
-
 			query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2);
 		}
 
@@ -1966,9 +1920,6 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				}
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
 
 		String sql = query.toString();
 
@@ -1979,14 +1930,15 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		QueryPos qPos = QueryPos.getInstance(q);
 
-		if (bindPublishDate) {
-			qPos.add(new Timestamp(publishDate.getTime()));
+		if (publishDate != null) {
+			qPos.add(CalendarUtil.getTimestamp(publishDate));
 		}
 
 		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+			Object[] values = orderByComparator.getOrderByConditionValues(assetEntry);
+
+			for (Object value : values) {
+				qPos.add(value);
 			}
 		}
 
@@ -2001,114 +1953,33 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	/**
-	 * Removes all the asset entries where publishDate = &#63; from the database.
-	 *
-	 * @param publishDate the publish date
-	 */
-	@Override
-	public void removeByPublishDate(Date publishDate) {
-		for (AssetEntry assetEntry : findByPublishDate(publishDate,
-				QueryUtil.ALL_POS, QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where publishDate = &#63;.
-	 *
-	 * @param publishDate the publish date
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByPublishDate(Date publishDate) {
-		FinderPath finderPath = _finderPathCountByPublishDate;
-
-		Object[] finderArgs = new Object[] { _getTime(publishDate) };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			boolean bindPublishDate = false;
-
-			if (publishDate == null) {
-				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1);
-			}
-			else {
-				bindPublishDate = true;
-
-				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				if (bindPublishDate) {
-					qPos.add(new Timestamp(publishDate.getTime()));
-				}
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1 = "assetEntry.publishDate IS NULL";
-	private static final String _FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2 = "assetEntry.publishDate = ?";
-	private FinderPath _finderPathWithPaginationFindByExpirationDate;
-	private FinderPath _finderPathWithoutPaginationFindByExpirationDate;
-	private FinderPath _finderPathCountByExpirationDate;
-
-	/**
 	 * Returns all the asset entries where expirationDate = &#63;.
 	 *
 	 * @param expirationDate the expiration date
 	 * @return the matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByExpirationDate(Date expirationDate) {
+	public List<AssetEntry> findByExpirationDate(Date expirationDate)
+			throws SystemException {
 		return findByExpirationDate(expirationDate, QueryUtil.ALL_POS,
-			QueryUtil.ALL_POS, null);
+				QueryUtil.ALL_POS, null);
 	}
 
 	/**
 	 * Returns a range of all the asset entries where expirationDate = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param expirationDate the expiration date
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByExpirationDate(Date expirationDate,
-		int start, int end) {
+												 int start, int end) throws SystemException {
 		return findByExpirationDate(expirationDate, start, end, null);
 	}
 
@@ -2116,7 +1987,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns an ordered range of all the asset entries where expirationDate = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param expirationDate the expiration date
@@ -2124,65 +1995,38 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByExpirationDate(Date expirationDate,
-		int start, int end, OrderByComparator<AssetEntry> orderByComparator) {
-		return findByExpirationDate(expirationDate, start, end,
-			orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where expirationDate = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param expirationDate the expiration date
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByExpirationDate(Date expirationDate,
-		int start, int end, OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
+												 int start, int end, OrderByComparator orderByComparator)
+			throws SystemException {
 		FinderPath finderPath = null;
 		Object[] finderArgs = null;
 
 		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
 				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByExpirationDate;
-			finderArgs = new Object[] { _getTime(expirationDate) };
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_EXPIRATIONDATE;
+			finderArgs = new Object[] { expirationDate };
 		}
 		else {
-			finderPath = _finderPathWithPaginationFindByExpirationDate;
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_BY_EXPIRATIONDATE;
 			finderArgs = new Object[] {
-					_getTime(expirationDate),
-					
+					expirationDate,
+
 					start, end, orderByComparator
-				};
+			};
 		}
 
-		List<AssetEntry> list = null;
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
 
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
+		if ((list != null) && !list.isEmpty()) {
+			for (AssetEntry assetEntry : list) {
+				if (!Validator.equals(expirationDate,
+						assetEntry.getExpirationDate())) {
+					list = null;
 
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if (!Objects.equals(expirationDate,
-								assetEntry.getExpirationDate())) {
-						list = null;
-
-						break;
-					}
+					break;
 				}
 			}
 		}
@@ -2192,32 +2036,24 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+						(orderByComparator.getOrderByFields().length * 3));
 			}
 			else {
-				query = new StringBundler(3);
+				query = new StringBundler(2);
 			}
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-			boolean bindExpirationDate = false;
 
 			if (expirationDate == null) {
 				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1);
 			}
 			else {
-				bindExpirationDate = true;
-
 				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2);
 			}
 
 			if (orderByComparator != null) {
 				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+						orderByComparator);
 			}
 
 			String sql = query.toString();
@@ -2231,33 +2067,26 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				QueryPos qPos = QueryPos.getInstance(q);
 
-				if (bindExpirationDate) {
-					qPos.add(new Timestamp(expirationDate.getTime()));
+				if (expirationDate != null) {
+					qPos.add(CalendarUtil.getTimestamp(expirationDate));
 				}
 
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				list = (List<AssetEntry>)QueryUtil.list(q, getDialect(), start,
+						end);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
@@ -2271,12 +2100,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param expirationDate the expiration date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByExpirationDate_First(Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+												 OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByExpirationDate_First(expirationDate,
 				orderByComparator);
 
@@ -2291,7 +2120,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("expirationDate=");
 		msg.append(expirationDate);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -2302,10 +2131,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param expirationDate the expiration date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByExpirationDate_First(Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
+												  OrderByComparator orderByComparator) throws SystemException {
 		List<AssetEntry> list = findByExpirationDate(expirationDate, 0, 1,
 				orderByComparator);
 
@@ -2322,12 +2151,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param expirationDate the expiration date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByExpirationDate_Last(Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+												OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByExpirationDate_Last(expirationDate,
 				orderByComparator);
 
@@ -2342,7 +2171,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("expirationDate=");
 		msg.append(expirationDate);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -2353,15 +2182,11 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param expirationDate the expiration date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByExpirationDate_Last(Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
+												 OrderByComparator orderByComparator) throws SystemException {
 		int count = countByExpirationDate(expirationDate);
-
-		if (count == 0) {
-			return null;
-		}
 
 		List<AssetEntry> list = findByExpirationDate(expirationDate, count - 1,
 				count, orderByComparator);
@@ -2380,12 +2205,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param expirationDate the expiration date
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry[] findByExpirationDate_PrevAndNext(long entryId,
-		Date expirationDate, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+														 Date expirationDate, OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByPrimaryKey(entryId);
 
 		Session session = null;
@@ -2414,14 +2239,13 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	protected AssetEntry getByExpirationDate_PrevAndNext(Session session,
-		AssetEntry assetEntry, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
+														 AssetEntry assetEntry, Date expirationDate,
+														 OrderByComparator orderByComparator, boolean previous) {
 		StringBundler query = null;
 
 		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+			query = new StringBundler(6 +
+					(orderByComparator.getOrderByFields().length * 6));
 		}
 		else {
 			query = new StringBundler(3);
@@ -2429,14 +2253,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
-		boolean bindExpirationDate = false;
-
 		if (expirationDate == null) {
 			query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1);
 		}
 		else {
-			bindExpirationDate = true;
-
 			query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2);
 		}
 
@@ -2495,9 +2315,6 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				}
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
 
 		String sql = query.toString();
 
@@ -2508,14 +2325,15 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		QueryPos qPos = QueryPos.getInstance(q);
 
-		if (bindExpirationDate) {
-			qPos.add(new Timestamp(expirationDate.getTime()));
+		if (expirationDate != null) {
+			qPos.add(CalendarUtil.getTimestamp(expirationDate));
 		}
 
 		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+			Object[] values = orderByComparator.getOrderByConditionValues(assetEntry);
+
+			for (Object value : values) {
+				qPos.add(value);
 			}
 		}
 
@@ -2530,114 +2348,33 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	/**
-	 * Removes all the asset entries where expirationDate = &#63; from the database.
-	 *
-	 * @param expirationDate the expiration date
-	 */
-	@Override
-	public void removeByExpirationDate(Date expirationDate) {
-		for (AssetEntry assetEntry : findByExpirationDate(expirationDate,
-				QueryUtil.ALL_POS, QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where expirationDate = &#63;.
-	 *
-	 * @param expirationDate the expiration date
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByExpirationDate(Date expirationDate) {
-		FinderPath finderPath = _finderPathCountByExpirationDate;
-
-		Object[] finderArgs = new Object[] { _getTime(expirationDate) };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			boolean bindExpirationDate = false;
-
-			if (expirationDate == null) {
-				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1);
-			}
-			else {
-				bindExpirationDate = true;
-
-				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				if (bindExpirationDate) {
-					qPos.add(new Timestamp(expirationDate.getTime()));
-				}
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1 = "assetEntry.expirationDate IS NULL";
-	private static final String _FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2 = "assetEntry.expirationDate = ?";
-	private FinderPath _finderPathWithPaginationFindByLayoutUuid;
-	private FinderPath _finderPathWithoutPaginationFindByLayoutUuid;
-	private FinderPath _finderPathCountByLayoutUuid;
-
-	/**
 	 * Returns all the asset entries where layoutUuid = &#63;.
 	 *
 	 * @param layoutUuid the layout uuid
 	 * @return the matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<AssetEntry> findByLayoutUuid(String layoutUuid) {
+	public List<AssetEntry> findByLayoutUuid(String layoutUuid)
+			throws SystemException {
 		return findByLayoutUuid(layoutUuid, QueryUtil.ALL_POS,
-			QueryUtil.ALL_POS, null);
+				QueryUtil.ALL_POS, null);
 	}
 
 	/**
 	 * Returns a range of all the asset entries where layoutUuid = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param layoutUuid the layout uuid
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByLayoutUuid(String layoutUuid, int start,
-		int end) {
+											 int end) throws SystemException {
 		return findByLayoutUuid(layoutUuid, start, end, null);
 	}
 
@@ -2645,7 +2382,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns an ordered range of all the asset entries where layoutUuid = &#63;.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param layoutUuid the layout uuid
@@ -2653,61 +2390,32 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public List<AssetEntry> findByLayoutUuid(String layoutUuid, int start,
-		int end, OrderByComparator<AssetEntry> orderByComparator) {
-		return findByLayoutUuid(layoutUuid, start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where layoutUuid = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param layoutUuid the layout uuid
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByLayoutUuid(String layoutUuid, int start,
-		int end, OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		layoutUuid = Objects.toString(layoutUuid, "");
-
-		boolean pagination = true;
+											 int end, OrderByComparator orderByComparator) throws SystemException {
 		FinderPath finderPath = null;
 		Object[] finderArgs = null;
 
 		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
 				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByLayoutUuid;
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_BY_LAYOUTUUID;
 			finderArgs = new Object[] { layoutUuid };
 		}
 		else {
-			finderPath = _finderPathWithPaginationFindByLayoutUuid;
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_BY_LAYOUTUUID;
 			finderArgs = new Object[] { layoutUuid, start, end, orderByComparator };
 		}
 
-		List<AssetEntry> list = null;
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
 
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
+		if ((list != null) && !list.isEmpty()) {
+			for (AssetEntry assetEntry : list) {
+				if (!Validator.equals(layoutUuid, assetEntry.getLayoutUuid())) {
+					list = null;
 
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if (!layoutUuid.equals(assetEntry.getLayoutUuid())) {
-						list = null;
-
-						break;
-					}
+					break;
 				}
 			}
 		}
@@ -2717,32 +2425,29 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 			if (orderByComparator != null) {
 				query = new StringBundler(3 +
-						(orderByComparator.getOrderByFields().length * 2));
+						(orderByComparator.getOrderByFields().length * 3));
 			}
 			else {
-				query = new StringBundler(3);
+				query = new StringBundler(2);
 			}
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
-			boolean bindLayoutUuid = false;
-
-			if (layoutUuid.isEmpty()) {
-				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
+			if (layoutUuid == null) {
+				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_1);
 			}
 			else {
-				bindLayoutUuid = true;
-
-				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
+				if (layoutUuid.equals(StringPool.BLANK)) {
+					query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
+				}
+				else {
+					query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
+				}
 			}
 
 			if (orderByComparator != null) {
 				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
+						orderByComparator);
 			}
 
 			String sql = query.toString();
@@ -2756,33 +2461,26 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				QueryPos qPos = QueryPos.getInstance(q);
 
-				if (bindLayoutUuid) {
+				if (layoutUuid != null) {
 					qPos.add(layoutUuid);
 				}
 
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				list = (List<AssetEntry>)QueryUtil.list(q, getDialect(), start,
+						end);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
@@ -2796,12 +2494,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param layoutUuid the layout uuid
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByLayoutUuid_First(String layoutUuid,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+											 OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByLayoutUuid_First(layoutUuid,
 				orderByComparator);
 
@@ -2816,7 +2514,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("layoutUuid=");
 		msg.append(layoutUuid);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -2827,10 +2525,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param layoutUuid the layout uuid
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByLayoutUuid_First(String layoutUuid,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											  OrderByComparator orderByComparator) throws SystemException {
 		List<AssetEntry> list = findByLayoutUuid(layoutUuid, 0, 1,
 				orderByComparator);
 
@@ -2847,12 +2545,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param layoutUuid the layout uuid
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByLayoutUuid_Last(String layoutUuid,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
+											OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByLayoutUuid_Last(layoutUuid,
 				orderByComparator);
 
@@ -2867,7 +2565,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		msg.append("layoutUuid=");
 		msg.append(layoutUuid);
 
-		msg.append("}");
+		msg.append(StringPool.CLOSE_CURLY_BRACE);
 
 		throw new NoSuchEntryException(msg.toString());
 	}
@@ -2878,15 +2576,11 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param layoutUuid the layout uuid
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByLayoutUuid_Last(String layoutUuid,
-		OrderByComparator<AssetEntry> orderByComparator) {
+											 OrderByComparator orderByComparator) throws SystemException {
 		int count = countByLayoutUuid(layoutUuid);
-
-		if (count == 0) {
-			return null;
-		}
 
 		List<AssetEntry> list = findByLayoutUuid(layoutUuid, count - 1, count,
 				orderByComparator);
@@ -2905,14 +2599,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param layoutUuid the layout uuid
 	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
 	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a asset entry with the primary key could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry[] findByLayoutUuid_PrevAndNext(long entryId,
-		String layoutUuid, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		layoutUuid = Objects.toString(layoutUuid, "");
-
+													 String layoutUuid, OrderByComparator orderByComparator)
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByPrimaryKey(entryId);
 
 		Session session = null;
@@ -2941,14 +2633,13 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	protected AssetEntry getByLayoutUuid_PrevAndNext(Session session,
-		AssetEntry assetEntry, String layoutUuid,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
+													 AssetEntry assetEntry, String layoutUuid,
+													 OrderByComparator orderByComparator, boolean previous) {
 		StringBundler query = null;
 
 		if (orderByComparator != null) {
-			query = new StringBundler(4 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
+			query = new StringBundler(6 +
+					(orderByComparator.getOrderByFields().length * 6));
 		}
 		else {
 			query = new StringBundler(3);
@@ -2956,15 +2647,16 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
-		boolean bindLayoutUuid = false;
-
-		if (layoutUuid.isEmpty()) {
-			query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
+		if (layoutUuid == null) {
+			query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_1);
 		}
 		else {
-			bindLayoutUuid = true;
-
-			query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
+			if (layoutUuid.equals(StringPool.BLANK)) {
+				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
+			}
+			else {
+				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
+			}
 		}
 
 		if (orderByComparator != null) {
@@ -3022,9 +2714,6 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				}
 			}
 		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
 
 		String sql = query.toString();
 
@@ -3035,14 +2724,15 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 		QueryPos qPos = QueryPos.getInstance(q);
 
-		if (bindLayoutUuid) {
+		if (layoutUuid != null) {
 			qPos.add(layoutUuid);
 		}
 
 		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
+			Object[] values = orderByComparator.getOrderByConditionValues(assetEntry);
+
+			for (Object value : values) {
+				qPos.add(value);
 			}
 		}
 
@@ -3057,99 +2747,16 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	}
 
 	/**
-	 * Removes all the asset entries where layoutUuid = &#63; from the database.
-	 *
-	 * @param layoutUuid the layout uuid
-	 */
-	@Override
-	public void removeByLayoutUuid(String layoutUuid) {
-		for (AssetEntry assetEntry : findByLayoutUuid(layoutUuid,
-				QueryUtil.ALL_POS, QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where layoutUuid = &#63;.
-	 *
-	 * @param layoutUuid the layout uuid
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByLayoutUuid(String layoutUuid) {
-		layoutUuid = Objects.toString(layoutUuid, "");
-
-		FinderPath finderPath = _finderPathCountByLayoutUuid;
-
-		Object[] finderArgs = new Object[] { layoutUuid };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(2);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			boolean bindLayoutUuid = false;
-
-			if (layoutUuid.isEmpty()) {
-				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
-			}
-			else {
-				bindLayoutUuid = true;
-
-				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				if (bindLayoutUuid) {
-					qPos.add(layoutUuid);
-				}
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2 = "assetEntry.layoutUuid = ?";
-	private static final String _FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3 = "(assetEntry.layoutUuid IS NULL OR assetEntry.layoutUuid = '')";
-	private FinderPath _finderPathFetchByG_CU;
-	private FinderPath _finderPathCountByG_CU;
-
-	/**
-	 * Returns the asset entry where groupId = &#63; and classUuid = &#63; or throws a {@link NoSuchEntryException} if it could not be found.
+	 * Returns the asset entry where groupId = &#63; and classUuid = &#63; or throws a {@link com.liferay.portlet.asset.NoSuchEntryException} if it could not be found.
 	 *
 	 * @param groupId the group ID
 	 * @param classUuid the class uuid
 	 * @return the matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByG_CU(long groupId, String classUuid)
-		throws NoSuchEntryException {
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByG_CU(groupId, classUuid);
 
 		if (assetEntry == null) {
@@ -3163,10 +2770,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 			msg.append(", classUuid=");
 			msg.append(classUuid);
 
-			msg.append("}");
+			msg.append(StringPool.CLOSE_CURLY_BRACE);
 
-			if (_log.isDebugEnabled()) {
-				_log.debug(msg.toString());
+			if (_log.isWarnEnabled()) {
+				_log.warn(msg.toString());
 			}
 
 			throw new NoSuchEntryException(msg.toString());
@@ -3181,9 +2788,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param groupId the group ID
 	 * @param classUuid the class uuid
 	 * @return the matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public AssetEntry fetchByG_CU(long groupId, String classUuid) {
+	public AssetEntry fetchByG_CU(long groupId, String classUuid)
+			throws SystemException {
 		return fetchByG_CU(groupId, classUuid, true);
 	}
 
@@ -3192,20 +2800,19 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param groupId the group ID
 	 * @param classUuid the class uuid
-	 * @param retrieveFromCache whether to retrieve from the finder cache
+	 * @param retrieveFromCache whether to use the finder cache
 	 * @return the matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByG_CU(long groupId, String classUuid,
-		boolean retrieveFromCache) {
-		classUuid = Objects.toString(classUuid, "");
-
+								  boolean retrieveFromCache) throws SystemException {
 		Object[] finderArgs = new Object[] { groupId, classUuid };
 
 		Object result = null;
+		GroupPartitionID partId = new GroupPartitionID(groupId);
 
 		if (retrieveFromCache) {
-			result = FinderCacheUtil.getResult(_finderPathFetchByG_CU,
+			result = PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_FETCH_BY_G_CU,
 					finderArgs, this);
 		}
 
@@ -3213,27 +2820,28 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 			AssetEntry assetEntry = (AssetEntry)result;
 
 			if ((groupId != assetEntry.getGroupId()) ||
-					!Objects.equals(classUuid, assetEntry.getClassUuid())) {
+					!Validator.equals(classUuid, assetEntry.getClassUuid())) {
 				result = null;
 			}
 		}
 
 		if (result == null) {
-			StringBundler query = new StringBundler(4);
+			StringBundler query = new StringBundler(3);
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
 			query.append(_FINDER_COLUMN_G_CU_GROUPID_2);
 
-			boolean bindClassUuid = false;
-
-			if (classUuid.isEmpty()) {
-				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_3);
+			if (classUuid == null) {
+				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_1);
 			}
 			else {
-				bindClassUuid = true;
-
-				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_2);
+				if (classUuid.equals(StringPool.BLANK)) {
+					query.append(_FINDER_COLUMN_G_CU_CLASSUUID_3);
+				}
+				else {
+					query.append(_FINDER_COLUMN_G_CU_CLASSUUID_2);
+				}
 			}
 
 			String sql = query.toString();
@@ -3249,155 +2857,68 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				qPos.add(groupId);
 
-				if (bindClassUuid) {
+				if (classUuid != null) {
 					qPos.add(classUuid);
 				}
 
 				List<AssetEntry> list = q.list();
 
+				result = list;
+
+				AssetEntry assetEntry = null;
+
 				if (list.isEmpty()) {
-					FinderCacheUtil.putResult(_finderPathFetchByG_CU,
-						finderArgs, list);
+					PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_FETCH_BY_G_CU,
+							finderArgs, list);
 				}
 				else {
-					if (list.size() > 1) {
-						Collections.sort(list, Collections.reverseOrder());
-
-						if (_log.isWarnEnabled()) {
-							_log.warn(
-								"AssetEntryPersistenceImpl.fetchByG_CU(long, String, boolean) with parameters (" +
-								StringUtil.merge(finderArgs) +
-								") yields a result set with more than 1 result. This violates the logical unique restriction. There is no order guarantee on which result is returned by this finder.");
-						}
-					}
-
-					AssetEntry assetEntry = list.get(0);
-
-					result = assetEntry;
+					assetEntry = list.get(0);
 
 					cacheResult(assetEntry);
+
+					if ((assetEntry.getGroupId() != groupId) ||
+							(assetEntry.getClassUuid() == null) ||
+							!assetEntry.getClassUuid().equals(classUuid)) {
+						PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_FETCH_BY_G_CU,
+								finderArgs, assetEntry);
+					}
 				}
+
+				return assetEntry;
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(_finderPathFetchByG_CU, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (result == null) {
+					PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_FETCH_BY_G_CU,
+							finderArgs);
+				}
+
 				closeSession(session);
 			}
-		}
-
-		if (result instanceof List<?>) {
-			return null;
 		}
 		else {
-			return (AssetEntry)result;
-		}
-	}
-
-	/**
-	 * Removes the asset entry where groupId = &#63; and classUuid = &#63; from the database.
-	 *
-	 * @param groupId the group ID
-	 * @param classUuid the class uuid
-	 * @return the asset entry that was removed
-	 */
-	@Override
-	public AssetEntry removeByG_CU(long groupId, String classUuid)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = findByG_CU(groupId, classUuid);
-
-		return remove(assetEntry);
-	}
-
-	/**
-	 * Returns the number of asset entries where groupId = &#63; and classUuid = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classUuid the class uuid
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByG_CU(long groupId, String classUuid) {
-		classUuid = Objects.toString(classUuid, "");
-
-		FinderPath finderPath = _finderPathCountByG_CU;
-
-		Object[] finderArgs = new Object[] { groupId, classUuid };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(3);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_G_CU_GROUPID_2);
-
-			boolean bindClassUuid = false;
-
-			if (classUuid.isEmpty()) {
-				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_3);
+			if (result instanceof List<?>) {
+				return null;
 			}
 			else {
-				bindClassUuid = true;
-
-				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_2);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				if (bindClassUuid) {
-					qPos.add(classUuid);
-				}
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
+				return (AssetEntry)result;
 			}
 		}
-
-		return count.intValue();
 	}
 
-	private static final String _FINDER_COLUMN_G_CU_GROUPID_2 = "assetEntry.groupId = ? AND ";
-	private static final String _FINDER_COLUMN_G_CU_CLASSUUID_2 = "assetEntry.classUuid = ?";
-	private static final String _FINDER_COLUMN_G_CU_CLASSUUID_3 = "(assetEntry.classUuid IS NULL OR assetEntry.classUuid = '')";
-	private FinderPath _finderPathFetchByC_C;
-	private FinderPath _finderPathCountByC_C;
-
 	/**
-	 * Returns the asset entry where classNameId = &#63; and classPK = &#63; or throws a {@link NoSuchEntryException} if it could not be found.
+	 * Returns the asset entry where classNameId = &#63; and classPK = &#63; or throws a {@link com.liferay.portlet.asset.NoSuchEntryException} if it could not be found.
 	 *
 	 * @param classNameId the class name ID
-	 * @param classPK the class pk
+	 * @param classPK the class p k
 	 * @return the matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
+	 * @throws com.liferay.portlet.asset.NoSuchEntryException if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry findByC_C(long classNameId, long classPK)
-		throws NoSuchEntryException {
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = fetchByC_C(classNameId, classPK);
 
 		if (assetEntry == null) {
@@ -3411,10 +2932,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 			msg.append(", classPK=");
 			msg.append(classPK);
 
-			msg.append("}");
+			msg.append(StringPool.CLOSE_CURLY_BRACE);
 
-			if (_log.isDebugEnabled()) {
-				_log.debug(msg.toString());
+			if (_log.isWarnEnabled()) {
+				_log.warn(msg.toString());
 			}
 
 			throw new NoSuchEntryException(msg.toString());
@@ -3427,11 +2948,12 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns the asset entry where classNameId = &#63; and classPK = &#63; or returns <code>null</code> if it could not be found. Uses the finder cache.
 	 *
 	 * @param classNameId the class name ID
-	 * @param classPK the class pk
+	 * @param classPK the class p k
 	 * @return the matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public AssetEntry fetchByC_C(long classNameId, long classPK) {
+	public AssetEntry fetchByC_C(long classNameId, long classPK)
+			throws SystemException {
 		return fetchByC_C(classNameId, classPK, true);
 	}
 
@@ -3439,19 +2961,19 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns the asset entry where classNameId = &#63; and classPK = &#63; or returns <code>null</code> if it could not be found, optionally using the finder cache.
 	 *
 	 * @param classNameId the class name ID
-	 * @param classPK the class pk
-	 * @param retrieveFromCache whether to retrieve from the finder cache
+	 * @param classPK the class p k
+	 * @param retrieveFromCache whether to use the finder cache
 	 * @return the matching asset entry, or <code>null</code> if a matching asset entry could not be found
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry fetchByC_C(long classNameId, long classPK,
-		boolean retrieveFromCache) {
+								 boolean retrieveFromCache) throws SystemException {
 		Object[] finderArgs = new Object[] { classNameId, classPK };
 
 		Object result = null;
 
 		if (retrieveFromCache) {
-			result = FinderCacheUtil.getResult(_finderPathFetchByC_C,
+			result = FinderCacheUtil.getResult(FINDER_PATH_FETCH_BY_C_C,
 					finderArgs, this);
 		}
 
@@ -3465,7 +2987,7 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		}
 
 		if (result == null) {
-			StringBundler query = new StringBundler(4);
+			StringBundler query = new StringBundler(3);
 
 			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
 
@@ -3490,66 +3012,645 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 
 				List<AssetEntry> list = q.list();
 
+				result = list;
+
+				AssetEntry assetEntry = null;
+
 				if (list.isEmpty()) {
-					FinderCacheUtil.putResult(_finderPathFetchByC_C,
-						finderArgs, list);
+					FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_C_C,
+							finderArgs, list);
 				}
 				else {
-					AssetEntry assetEntry = list.get(0);
-
-					result = assetEntry;
+					assetEntry = list.get(0);
 
 					cacheResult(assetEntry);
+
+					if ((assetEntry.getClassNameId() != classNameId) ||
+							(assetEntry.getClassPK() != classPK)) {
+						FinderCacheUtil.putResult(FINDER_PATH_FETCH_BY_C_C,
+								finderArgs, assetEntry);
+					}
 				}
+
+				return assetEntry;
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(_finderPathFetchByC_C, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (result == null) {
+					FinderCacheUtil.removeResult(FINDER_PATH_FETCH_BY_C_C,
+							finderArgs);
+				}
+
+				closeSession(session);
+			}
+		}
+		else {
+			if (result instanceof List<?>) {
+				return null;
+			}
+			else {
+				return (AssetEntry)result;
+			}
+		}
+	}
+
+	/**
+	 * Returns all the asset entries.
+	 *
+	 * @return the asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public List<AssetEntry> findAll() throws SystemException {
+		return findAll(QueryUtil.ALL_POS, QueryUtil.ALL_POS, null);
+	}
+
+	/**
+	 * Returns a range of all the asset entries.
+	 *
+	 * <p>
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
+	 * </p>
+	 *
+	 * @param start the lower bound of the range of asset entries
+	 * @param end the upper bound of the range of asset entries (not inclusive)
+	 * @return the range of asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public List<AssetEntry> findAll(int start, int end)
+			throws SystemException {
+		return findAll(start, end, null);
+	}
+
+	/**
+	 * Returns an ordered range of all the asset entries.
+	 *
+	 * <p>
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
+	 * </p>
+	 *
+	 * @param start the lower bound of the range of asset entries
+	 * @param end the upper bound of the range of asset entries (not inclusive)
+	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
+	 * @return the ordered range of asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public List<AssetEntry> findAll(int start, int end,
+									OrderByComparator orderByComparator) throws SystemException {
+		FinderPath finderPath = null;
+		Object[] finderArgs = new Object[] { start, end, orderByComparator };
+
+		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
+				(orderByComparator == null)) {
+			finderPath = FINDER_PATH_WITHOUT_PAGINATION_FIND_ALL;
+			finderArgs = FINDER_ARGS_EMPTY;
+		}
+		else {
+			finderPath = FINDER_PATH_WITH_PAGINATION_FIND_ALL;
+			finderArgs = new Object[] { start, end, orderByComparator };
+		}
+
+		List<AssetEntry> list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
+				finderArgs, this);
+
+		if (list == null) {
+			StringBundler query = null;
+			String sql = null;
+
+			if (orderByComparator != null) {
+				query = new StringBundler(2 +
+						(orderByComparator.getOrderByFields().length * 3));
+
+				query.append(_SQL_SELECT_ASSETENTRY);
+
+				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
+						orderByComparator);
+
+				sql = query.toString();
+			}
+			else {
+				sql = _SQL_SELECT_ASSETENTRY;
+			}
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				if (orderByComparator == null) {
+					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
+							start, end, false);
+
+					Collections.sort(list);
+				}
+				else {
+					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
+							start, end);
+				}
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (list == null) {
+					FinderCacheUtil.removeResult(finderPath, finderArgs);
+				}
+				else {
+					cacheResult(list);
+
+					FinderCacheUtil.putResult(finderPath, finderArgs, list);
+				}
+
 				closeSession(session);
 			}
 		}
 
-		if (result instanceof List<?>) {
-			return null;
+		return list;
+	}
+
+	/**
+	 * Removes all the asset entries where companyId = &#63; from the database.
+	 *
+	 * @param companyId the company ID
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeByCompanyId(long companyId) throws SystemException {
+		for (AssetEntry assetEntry : findByCompanyId(companyId)) {
+			remove(assetEntry);
 		}
-		else {
-			return (AssetEntry)result;
+	}
+
+	/**
+	 * Removes all the asset entries where visible = &#63; from the database.
+	 *
+	 * @param visible the visible
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeByVisible(boolean visible) throws SystemException {
+		for (AssetEntry assetEntry : findByVisible(visible)) {
+			remove(assetEntry);
 		}
+	}
+
+	/**
+	 * Removes all the asset entries where publishDate = &#63; from the database.
+	 *
+	 * @param publishDate the publish date
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeByPublishDate(Date publishDate) throws SystemException {
+		for (AssetEntry assetEntry : findByPublishDate(publishDate)) {
+			remove(assetEntry);
+		}
+	}
+
+	/**
+	 * Removes all the asset entries where expirationDate = &#63; from the database.
+	 *
+	 * @param expirationDate the expiration date
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeByExpirationDate(Date expirationDate)
+			throws SystemException {
+		for (AssetEntry assetEntry : findByExpirationDate(expirationDate)) {
+			remove(assetEntry);
+		}
+	}
+
+	/**
+	 * Removes all the asset entries where layoutUuid = &#63; from the database.
+	 *
+	 * @param layoutUuid the layout uuid
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeByLayoutUuid(String layoutUuid) throws SystemException {
+		for (AssetEntry assetEntry : findByLayoutUuid(layoutUuid)) {
+			remove(assetEntry);
+		}
+	}
+
+	/**
+	 * Removes the asset entry where groupId = &#63; and classUuid = &#63; from the database.
+	 *
+	 * @param groupId the group ID
+	 * @param classUuid the class uuid
+	 * @return the asset entry that was removed
+	 * @throws SystemException if a system exception occurred
+	 */
+	public AssetEntry removeByG_CU(long groupId, String classUuid)
+			throws NoSuchEntryException, SystemException {
+		AssetEntry assetEntry = findByG_CU(groupId, classUuid);
+
+		return remove(assetEntry);
 	}
 
 	/**
 	 * Removes the asset entry where classNameId = &#63; and classPK = &#63; from the database.
 	 *
 	 * @param classNameId the class name ID
-	 * @param classPK the class pk
+	 * @param classPK the class p k
 	 * @return the asset entry that was removed
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public AssetEntry removeByC_C(long classNameId, long classPK)
-		throws NoSuchEntryException {
+			throws NoSuchEntryException, SystemException {
 		AssetEntry assetEntry = findByC_C(classNameId, classPK);
 
 		return remove(assetEntry);
 	}
 
 	/**
+	 * Removes all the asset entries from the database.
+	 *
+	 * @throws SystemException if a system exception occurred
+	 */
+	public void removeAll() throws SystemException {
+		for (AssetEntry assetEntry : findAll()) {
+			remove(assetEntry);
+		}
+	}
+
+	/**
+	 * Returns the number of asset entries where companyId = &#63;.
+	 *
+	 * @param companyId the company ID
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByCompanyId(long companyId) throws SystemException {
+		Object[] finderArgs = new Object[] { companyId };
+
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_COMPANYID,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(2);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			query.append(_FINDER_COLUMN_COMPANYID_COMPANYID_2);
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				qPos.add(companyId);
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_COMPANYID,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
+	 * Returns the number of asset entries where visible = &#63;.
+	 *
+	 * @param visible the visible
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByVisible(boolean visible) throws SystemException {
+		Object[] finderArgs = new Object[] { visible };
+
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_VISIBLE,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(2);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			query.append(_FINDER_COLUMN_VISIBLE_VISIBLE_2);
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				qPos.add(visible);
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_VISIBLE,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
+	 * Returns the number of asset entries where publishDate = &#63;.
+	 *
+	 * @param publishDate the publish date
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByPublishDate(Date publishDate) throws SystemException {
+		Object[] finderArgs = new Object[] { publishDate };
+
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_PUBLISHDATE,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(2);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			if (publishDate == null) {
+				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1);
+			}
+			else {
+				query.append(_FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2);
+			}
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				if (publishDate != null) {
+					qPos.add(CalendarUtil.getTimestamp(publishDate));
+				}
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_PUBLISHDATE,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
+	 * Returns the number of asset entries where expirationDate = &#63;.
+	 *
+	 * @param expirationDate the expiration date
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByExpirationDate(Date expirationDate)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { expirationDate };
+
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_EXPIRATIONDATE,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(2);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			if (expirationDate == null) {
+				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1);
+			}
+			else {
+				query.append(_FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2);
+			}
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				if (expirationDate != null) {
+					qPos.add(CalendarUtil.getTimestamp(expirationDate));
+				}
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_EXPIRATIONDATE,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
+	 * Returns the number of asset entries where layoutUuid = &#63;.
+	 *
+	 * @param layoutUuid the layout uuid
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByLayoutUuid(String layoutUuid) throws SystemException {
+		Object[] finderArgs = new Object[] { layoutUuid };
+
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_LAYOUTUUID,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(2);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			if (layoutUuid == null) {
+				query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_1);
+			}
+			else {
+				if (layoutUuid.equals(StringPool.BLANK)) {
+					query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3);
+				}
+				else {
+					query.append(_FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2);
+				}
+			}
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				if (layoutUuid != null) {
+					qPos.add(layoutUuid);
+				}
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_LAYOUTUUID,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
+	 * Returns the number of asset entries where groupId = &#63; and classUuid = &#63;.
+	 *
+	 * @param groupId the group ID
+	 * @param classUuid the class uuid
+	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
+	 */
+	public int countByG_CU(long groupId, String classUuid)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { groupId, classUuid };
+
+		GroupPartitionID partId = new GroupPartitionID(groupId);
+		Long count = (Long)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_COUNT_BY_G_CU,
+				finderArgs, this);
+
+		if (count == null) {
+			StringBundler query = new StringBundler(3);
+
+			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
+
+			query.append(_FINDER_COLUMN_G_CU_GROUPID_2);
+
+			if (classUuid == null) {
+				query.append(_FINDER_COLUMN_G_CU_CLASSUUID_1);
+			}
+			else {
+				if (classUuid.equals(StringPool.BLANK)) {
+					query.append(_FINDER_COLUMN_G_CU_CLASSUUID_3);
+				}
+				else {
+					query.append(_FINDER_COLUMN_G_CU_CLASSUUID_2);
+				}
+			}
+
+			String sql = query.toString();
+
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				Query q = session.createQuery(sql);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				qPos.add(groupId);
+
+				if (classUuid != null) {
+					qPos.add(classUuid);
+				}
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_COUNT_BY_G_CU,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
+	}
+
+	/**
 	 * Returns the number of asset entries where classNameId = &#63; and classPK = &#63;.
 	 *
 	 * @param classNameId the class name ID
-	 * @param classPK the class pk
+	 * @param classPK the class p k
 	 * @return the number of matching asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public int countByC_C(long classNameId, long classPK) {
-		FinderPath finderPath = _finderPathCountByC_C;
-
+	public int countByC_C(long classNameId, long classPK)
+			throws SystemException {
 		Object[] finderArgs = new Object[] { classNameId, classPK };
 
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_BY_C_C,
+				finderArgs, this);
 
 		if (count == null) {
 			StringBundler query = new StringBundler(3);
@@ -3576,2041 +3677,33 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				qPos.add(classPK);
 
 				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
 				throw processException(e);
 			}
 			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_BY_C_C, finderArgs,
+						count);
+
 				closeSession(session);
 			}
 		}
 
 		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_C_C_CLASSNAMEID_2 = "assetEntry.classNameId = ? AND ";
-	private static final String _FINDER_COLUMN_C_C_CLASSPK_2 = "assetEntry.classPK = ?";
-	private FinderPath _finderPathWithPaginationFindByG_C_V;
-	private FinderPath _finderPathWithoutPaginationFindByG_C_V;
-	private FinderPath _finderPathCountByG_C_V;
-
-	/**
-	 * Returns all the asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @return the matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_V(long groupId, long classNameId,
-		boolean visible) {
-		return findByG_C_V(groupId, classNameId, visible, QueryUtil.ALL_POS,
-			QueryUtil.ALL_POS, null);
-	}
-
-	/**
-	 * Returns a range of all the asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @return the range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_V(long groupId, long classNameId,
-		boolean visible, int start, int end) {
-		return findByG_C_V(groupId, classNameId, visible, start, end, null);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_V(long groupId, long classNameId,
-		boolean visible, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findByG_C_V(groupId, classNameId, visible, start, end,
-			orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_V(long groupId, long classNameId,
-		boolean visible, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
-		FinderPath finderPath = null;
-		Object[] finderArgs = null;
-
-		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
-				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByG_C_V;
-			finderArgs = new Object[] { groupId, classNameId, visible };
-		}
-		else {
-			finderPath = _finderPathWithPaginationFindByG_C_V;
-			finderArgs = new Object[] {
-					groupId, classNameId, visible,
-					
-					start, end, orderByComparator
-				};
-		}
-
-		List<AssetEntry> list = null;
-
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
-
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if ((groupId != assetEntry.getGroupId()) ||
-							(classNameId != assetEntry.getClassNameId()) ||
-							(visible != assetEntry.isVisible())) {
-						list = null;
-
-						break;
-					}
-				}
-			}
-		}
-
-		if (list == null) {
-			StringBundler query = null;
-
-			if (orderByComparator != null) {
-				query = new StringBundler(5 +
-						(orderByComparator.getOrderByFields().length * 2));
-			}
-			else {
-				query = new StringBundler(5);
-			}
-
-			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_G_C_V_GROUPID_2);
-
-			query.append(_FINDER_COLUMN_G_C_V_CLASSNAMEID_2);
-
-			query.append(_FINDER_COLUMN_G_C_V_VISIBLE_2);
-
-			if (orderByComparator != null) {
-				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				qPos.add(classNameId);
-
-				qPos.add(visible);
-
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return list;
-	}
-
-	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry findByG_C_V_First(long groupId, long classNameId,
-		boolean visible, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByG_C_V_First(groupId, classNameId,
-				visible, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
-		}
-
-		StringBundler msg = new StringBundler(8);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append(", classNameId=");
-		msg.append(classNameId);
-
-		msg.append(", visible=");
-		msg.append(visible);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
-	}
-
-	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry fetchByG_C_V_First(long groupId, long classNameId,
-		boolean visible, OrderByComparator<AssetEntry> orderByComparator) {
-		List<AssetEntry> list = findByG_C_V(groupId, classNameId, visible, 0,
-				1, orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry findByG_C_V_Last(long groupId, long classNameId,
-		boolean visible, OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByG_C_V_Last(groupId, classNameId,
-				visible, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
-		}
-
-		StringBundler msg = new StringBundler(8);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append(", classNameId=");
-		msg.append(classNameId);
-
-		msg.append(", visible=");
-		msg.append(visible);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
-	}
-
-	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry fetchByG_C_V_Last(long groupId, long classNameId,
-		boolean visible, OrderByComparator<AssetEntry> orderByComparator) {
-		int count = countByG_C_V(groupId, classNameId, visible);
-
-		if (count == 0) {
-			return null;
-		}
-
-		List<AssetEntry> list = findByG_C_V(groupId, classNameId, visible,
-				count - 1, count, orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns the asset entries before and after the current asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param entryId the primary key of the current asset entry
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry[] findByG_C_V_PrevAndNext(long entryId, long groupId,
-		long classNameId, boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = findByPrimaryKey(entryId);
-
-		Session session = null;
-
-		try {
-			session = openSession();
-
-			AssetEntry[] array = new AssetEntryImpl[3];
-
-			array[0] = getByG_C_V_PrevAndNext(session, assetEntry, groupId,
-					classNameId, visible, orderByComparator, true);
-
-			array[1] = assetEntry;
-
-			array[2] = getByG_C_V_PrevAndNext(session, assetEntry, groupId,
-					classNameId, visible, orderByComparator, false);
-
-			return array;
-		}
-		catch (Exception e) {
-			throw processException(e);
-		}
-		finally {
-			closeSession(session);
-		}
-	}
-
-	protected AssetEntry getByG_C_V_PrevAndNext(Session session,
-		AssetEntry assetEntry, long groupId, long classNameId, boolean visible,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
-		StringBundler query = null;
-
-		if (orderByComparator != null) {
-			query = new StringBundler(6 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
-		}
-		else {
-			query = new StringBundler(5);
-		}
-
-		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-		query.append(_FINDER_COLUMN_G_C_V_GROUPID_2);
-
-		query.append(_FINDER_COLUMN_G_C_V_CLASSNAMEID_2);
-
-		query.append(_FINDER_COLUMN_G_C_V_VISIBLE_2);
-
-		if (orderByComparator != null) {
-			String[] orderByConditionFields = orderByComparator.getOrderByConditionFields();
-
-			if (orderByConditionFields.length > 0) {
-				query.append(WHERE_AND);
-			}
-
-			for (int i = 0; i < orderByConditionFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByConditionFields[i]);
-
-				if ((i + 1) < orderByConditionFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN_HAS_NEXT);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN);
-					}
-				}
-			}
-
-			query.append(ORDER_BY_CLAUSE);
-
-			String[] orderByFields = orderByComparator.getOrderByFields();
-
-			for (int i = 0; i < orderByFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByFields[i]);
-
-				if ((i + 1) < orderByFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC_HAS_NEXT);
-					}
-					else {
-						query.append(ORDER_BY_DESC_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC);
-					}
-					else {
-						query.append(ORDER_BY_DESC);
-					}
-				}
-			}
-		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
-
-		String sql = query.toString();
-
-		Query q = session.createQuery(sql);
-
-		q.setFirstResult(0);
-		q.setMaxResults(2);
-
-		QueryPos qPos = QueryPos.getInstance(q);
-
-		qPos.add(groupId);
-
-		qPos.add(classNameId);
-
-		qPos.add(visible);
-
-		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
-			}
-		}
-
-		List<AssetEntry> list = q.list();
-
-		if (list.size() == 2) {
-			return list.get(1);
-		}
-		else {
-			return null;
-		}
-	}
-
-	/**
-	 * Removes all the asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63; from the database.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 */
-	@Override
-	public void removeByG_C_V(long groupId, long classNameId, boolean visible) {
-		for (AssetEntry assetEntry : findByG_C_V(groupId, classNameId, visible,
-				QueryUtil.ALL_POS, QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where groupId = &#63; and classNameId = &#63; and visible = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param visible the visible
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByG_C_V(long groupId, long classNameId, boolean visible) {
-		FinderPath finderPath = _finderPathCountByG_C_V;
-
-		Object[] finderArgs = new Object[] { groupId, classNameId, visible };
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(4);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_G_C_V_GROUPID_2);
-
-			query.append(_FINDER_COLUMN_G_C_V_CLASSNAMEID_2);
-
-			query.append(_FINDER_COLUMN_G_C_V_VISIBLE_2);
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				qPos.add(classNameId);
-
-				qPos.add(visible);
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_G_C_V_GROUPID_2 = "assetEntry.groupId = ? AND ";
-	private static final String _FINDER_COLUMN_G_C_V_CLASSNAMEID_2 = "assetEntry.classNameId = ? AND ";
-	private static final String _FINDER_COLUMN_G_C_V_VISIBLE_2 = "assetEntry.visible = ?";
-	private FinderPath _finderPathWithPaginationFindByG_C_P_E;
-	private FinderPath _finderPathWithoutPaginationFindByG_C_P_E;
-	private FinderPath _finderPathCountByG_C_P_E;
-
-	/**
-	 * Returns all the asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @return the matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_P_E(long groupId, long classNameId,
-		Date publishDate, Date expirationDate) {
-		return findByG_C_P_E(groupId, classNameId, publishDate, expirationDate,
-			QueryUtil.ALL_POS, QueryUtil.ALL_POS, null);
-	}
-
-	/**
-	 * Returns a range of all the asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @return the range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_P_E(long groupId, long classNameId,
-		Date publishDate, Date expirationDate, int start, int end) {
-		return findByG_C_P_E(groupId, classNameId, publishDate, expirationDate,
-			start, end, null);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_P_E(long groupId, long classNameId,
-		Date publishDate, Date expirationDate, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findByG_C_P_E(groupId, classNameId, publishDate, expirationDate,
-			start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of matching asset entries
-	 */
-	@Override
-	public List<AssetEntry> findByG_C_P_E(long groupId, long classNameId,
-		Date publishDate, Date expirationDate, int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
-		FinderPath finderPath = null;
-		Object[] finderArgs = null;
-
-		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
-				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindByG_C_P_E;
-			finderArgs = new Object[] {
-					groupId, classNameId, _getTime(publishDate),
-					_getTime(expirationDate)
-				};
-		}
-		else {
-			finderPath = _finderPathWithPaginationFindByG_C_P_E;
-			finderArgs = new Object[] {
-					groupId, classNameId, _getTime(publishDate),
-					_getTime(expirationDate),
-					
-					start, end, orderByComparator
-				};
-		}
-
-		List<AssetEntry> list = null;
-
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
-
-			if ((list != null) && !list.isEmpty()) {
-				for (AssetEntry assetEntry : list) {
-					if ((groupId != assetEntry.getGroupId()) ||
-							(classNameId != assetEntry.getClassNameId()) ||
-							!Objects.equals(publishDate,
-								assetEntry.getPublishDate()) ||
-							!Objects.equals(expirationDate,
-								assetEntry.getExpirationDate())) {
-						list = null;
-
-						break;
-					}
-				}
-			}
-		}
-
-		if (list == null) {
-			StringBundler query = null;
-
-			if (orderByComparator != null) {
-				query = new StringBundler(6 +
-						(orderByComparator.getOrderByFields().length * 2));
-			}
-			else {
-				query = new StringBundler(6);
-			}
-
-			query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_G_C_P_E_GROUPID_2);
-
-			query.append(_FINDER_COLUMN_G_C_P_E_CLASSNAMEID_2);
-
-			boolean bindPublishDate = false;
-
-			if (publishDate == null) {
-				query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_1);
-			}
-			else {
-				bindPublishDate = true;
-
-				query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_2);
-			}
-
-			boolean bindExpirationDate = false;
-
-			if (expirationDate == null) {
-				query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_1);
-			}
-			else {
-				bindExpirationDate = true;
-
-				query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_2);
-			}
-
-			if (orderByComparator != null) {
-				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-			}
-			else
-			 if (pagination) {
-				query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				qPos.add(classNameId);
-
-				if (bindPublishDate) {
-					qPos.add(new Timestamp(publishDate.getTime()));
-				}
-
-				if (bindExpirationDate) {
-					qPos.add(new Timestamp(expirationDate.getTime()));
-				}
-
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return list;
-	}
-
-	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry findByG_C_P_E_First(long groupId, long classNameId,
-		Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByG_C_P_E_First(groupId, classNameId,
-				publishDate, expirationDate, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
-		}
-
-		StringBundler msg = new StringBundler(10);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append(", classNameId=");
-		msg.append(classNameId);
-
-		msg.append(", publishDate=");
-		msg.append(publishDate);
-
-		msg.append(", expirationDate=");
-		msg.append(expirationDate);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
-	}
-
-	/**
-	 * Returns the first asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the first matching asset entry, or <code>null</code> if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry fetchByG_C_P_E_First(long groupId, long classNameId,
-		Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		List<AssetEntry> list = findByG_C_P_E(groupId, classNameId,
-				publishDate, expirationDate, 0, 1, orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry
-	 * @throws NoSuchEntryException if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry findByG_C_P_E_Last(long groupId, long classNameId,
-		Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByG_C_P_E_Last(groupId, classNameId,
-				publishDate, expirationDate, orderByComparator);
-
-		if (assetEntry != null) {
-			return assetEntry;
-		}
-
-		StringBundler msg = new StringBundler(10);
-
-		msg.append(_NO_SUCH_ENTITY_WITH_KEY);
-
-		msg.append("groupId=");
-		msg.append(groupId);
-
-		msg.append(", classNameId=");
-		msg.append(classNameId);
-
-		msg.append(", publishDate=");
-		msg.append(publishDate);
-
-		msg.append(", expirationDate=");
-		msg.append(expirationDate);
-
-		msg.append("}");
-
-		throw new NoSuchEntryException(msg.toString());
-	}
-
-	/**
-	 * Returns the last asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the last matching asset entry, or <code>null</code> if a matching asset entry could not be found
-	 */
-	@Override
-	public AssetEntry fetchByG_C_P_E_Last(long groupId, long classNameId,
-		Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		int count = countByG_C_P_E(groupId, classNameId, publishDate,
-				expirationDate);
-
-		if (count == 0) {
-			return null;
-		}
-
-		List<AssetEntry> list = findByG_C_P_E(groupId, classNameId,
-				publishDate, expirationDate, count - 1, count, orderByComparator);
-
-		if (!list.isEmpty()) {
-			return list.get(0);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns the asset entries before and after the current asset entry in the ordered set where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param entryId the primary key of the current asset entry
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @param orderByComparator the comparator to order the set by (optionally <code>null</code>)
-	 * @return the previous, current, and next asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry[] findByG_C_P_E_PrevAndNext(long entryId, long groupId,
-		long classNameId, Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = findByPrimaryKey(entryId);
-
-		Session session = null;
-
-		try {
-			session = openSession();
-
-			AssetEntry[] array = new AssetEntryImpl[3];
-
-			array[0] = getByG_C_P_E_PrevAndNext(session, assetEntry, groupId,
-					classNameId, publishDate, expirationDate,
-					orderByComparator, true);
-
-			array[1] = assetEntry;
-
-			array[2] = getByG_C_P_E_PrevAndNext(session, assetEntry, groupId,
-					classNameId, publishDate, expirationDate,
-					orderByComparator, false);
-
-			return array;
-		}
-		catch (Exception e) {
-			throw processException(e);
-		}
-		finally {
-			closeSession(session);
-		}
-	}
-
-	protected AssetEntry getByG_C_P_E_PrevAndNext(Session session,
-		AssetEntry assetEntry, long groupId, long classNameId,
-		Date publishDate, Date expirationDate,
-		OrderByComparator<AssetEntry> orderByComparator, boolean previous) {
-		StringBundler query = null;
-
-		if (orderByComparator != null) {
-			query = new StringBundler(7 +
-					(orderByComparator.getOrderByConditionFields().length * 3) +
-					(orderByComparator.getOrderByFields().length * 3));
-		}
-		else {
-			query = new StringBundler(6);
-		}
-
-		query.append(_SQL_SELECT_ASSETENTRY_WHERE);
-
-		query.append(_FINDER_COLUMN_G_C_P_E_GROUPID_2);
-
-		query.append(_FINDER_COLUMN_G_C_P_E_CLASSNAMEID_2);
-
-		boolean bindPublishDate = false;
-
-		if (publishDate == null) {
-			query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_1);
-		}
-		else {
-			bindPublishDate = true;
-
-			query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_2);
-		}
-
-		boolean bindExpirationDate = false;
-
-		if (expirationDate == null) {
-			query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_1);
-		}
-		else {
-			bindExpirationDate = true;
-
-			query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_2);
-		}
-
-		if (orderByComparator != null) {
-			String[] orderByConditionFields = orderByComparator.getOrderByConditionFields();
-
-			if (orderByConditionFields.length > 0) {
-				query.append(WHERE_AND);
-			}
-
-			for (int i = 0; i < orderByConditionFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByConditionFields[i]);
-
-				if ((i + 1) < orderByConditionFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN_HAS_NEXT);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(WHERE_GREATER_THAN);
-					}
-					else {
-						query.append(WHERE_LESSER_THAN);
-					}
-				}
-			}
-
-			query.append(ORDER_BY_CLAUSE);
-
-			String[] orderByFields = orderByComparator.getOrderByFields();
-
-			for (int i = 0; i < orderByFields.length; i++) {
-				query.append(_ORDER_BY_ENTITY_ALIAS);
-				query.append(orderByFields[i]);
-
-				if ((i + 1) < orderByFields.length) {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC_HAS_NEXT);
-					}
-					else {
-						query.append(ORDER_BY_DESC_HAS_NEXT);
-					}
-				}
-				else {
-					if (orderByComparator.isAscending() ^ previous) {
-						query.append(ORDER_BY_ASC);
-					}
-					else {
-						query.append(ORDER_BY_DESC);
-					}
-				}
-			}
-		}
-		else {
-			query.append(AssetEntryModelImpl.ORDER_BY_JPQL);
-		}
-
-		String sql = query.toString();
-
-		Query q = session.createQuery(sql);
-
-		q.setFirstResult(0);
-		q.setMaxResults(2);
-
-		QueryPos qPos = QueryPos.getInstance(q);
-
-		qPos.add(groupId);
-
-		qPos.add(classNameId);
-
-		if (bindPublishDate) {
-			qPos.add(new Timestamp(publishDate.getTime()));
-		}
-
-		if (bindExpirationDate) {
-			qPos.add(new Timestamp(expirationDate.getTime()));
-		}
-
-		if (orderByComparator != null) {
-			for (Object orderByConditionValue : orderByComparator.getOrderByConditionValues(
-					assetEntry)) {
-				qPos.add(orderByConditionValue);
-			}
-		}
-
-		List<AssetEntry> list = q.list();
-
-		if (list.size() == 2) {
-			return list.get(1);
-		}
-		else {
-			return null;
-		}
-	}
-
-	/**
-	 * Removes all the asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63; from the database.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 */
-	@Override
-	public void removeByG_C_P_E(long groupId, long classNameId,
-		Date publishDate, Date expirationDate) {
-		for (AssetEntry assetEntry : findByG_C_P_E(groupId, classNameId,
-				publishDate, expirationDate, QueryUtil.ALL_POS,
-				QueryUtil.ALL_POS, null)) {
-			remove(assetEntry);
-		}
-	}
-
-	/**
-	 * Returns the number of asset entries where groupId = &#63; and classNameId = &#63; and publishDate = &#63; and expirationDate = &#63;.
-	 *
-	 * @param groupId the group ID
-	 * @param classNameId the class name ID
-	 * @param publishDate the publish date
-	 * @param expirationDate the expiration date
-	 * @return the number of matching asset entries
-	 */
-	@Override
-	public int countByG_C_P_E(long groupId, long classNameId, Date publishDate,
-		Date expirationDate) {
-		FinderPath finderPath = _finderPathCountByG_C_P_E;
-
-		Object[] finderArgs = new Object[] {
-				groupId, classNameId, _getTime(publishDate),
-				_getTime(expirationDate)
-			};
-
-		Long count = (Long)FinderCacheUtil.getResult(finderPath, finderArgs,
-				this);
-
-		if (count == null) {
-			StringBundler query = new StringBundler(5);
-
-			query.append(_SQL_COUNT_ASSETENTRY_WHERE);
-
-			query.append(_FINDER_COLUMN_G_C_P_E_GROUPID_2);
-
-			query.append(_FINDER_COLUMN_G_C_P_E_CLASSNAMEID_2);
-
-			boolean bindPublishDate = false;
-
-			if (publishDate == null) {
-				query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_1);
-			}
-			else {
-				bindPublishDate = true;
-
-				query.append(_FINDER_COLUMN_G_C_P_E_PUBLISHDATE_2);
-			}
-
-			boolean bindExpirationDate = false;
-
-			if (expirationDate == null) {
-				query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_1);
-			}
-			else {
-				bindExpirationDate = true;
-
-				query.append(_FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_2);
-			}
-
-			String sql = query.toString();
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				QueryPos qPos = QueryPos.getInstance(q);
-
-				qPos.add(groupId);
-
-				qPos.add(classNameId);
-
-				if (bindPublishDate) {
-					qPos.add(new Timestamp(publishDate.getTime()));
-				}
-
-				if (bindExpirationDate) {
-					qPos.add(new Timestamp(expirationDate.getTime()));
-				}
-
-				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, count);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return count.intValue();
-	}
-
-	private static final String _FINDER_COLUMN_G_C_P_E_GROUPID_2 = "assetEntry.groupId = ? AND ";
-	private static final String _FINDER_COLUMN_G_C_P_E_CLASSNAMEID_2 = "assetEntry.classNameId = ? AND ";
-	private static final String _FINDER_COLUMN_G_C_P_E_PUBLISHDATE_1 = "assetEntry.publishDate IS NULL AND ";
-	private static final String _FINDER_COLUMN_G_C_P_E_PUBLISHDATE_2 = "assetEntry.publishDate = ? AND ";
-	private static final String _FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_1 = "assetEntry.expirationDate IS NULL";
-	private static final String _FINDER_COLUMN_G_C_P_E_EXPIRATIONDATE_2 = "assetEntry.expirationDate = ?";
-
-	public AssetEntryPersistenceImpl() {
-		setModelClass(AssetEntry.class);
-
-		setModelImplClass(AssetEntryImpl.class);
-		setModelPKClass(long.class);
-		setEntityCacheEnabled(AssetEntryModelImpl.ENTITY_CACHE_ENABLED);
-	}
-
-	/**
-	 * Caches the asset entry in the entity cache if it is enabled.
-	 *
-	 * @param assetEntry the asset entry
-	 */
-	@Override
-	public void cacheResult(AssetEntry assetEntry) {
-		EntityCacheUtil.putResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-			AssetEntryImpl.class, assetEntry.getPrimaryKey(), assetEntry);
-
-		FinderCacheUtil.putResult(_finderPathFetchByG_CU,
-			new Object[] { assetEntry.getGroupId(), assetEntry.getClassUuid() },
-			assetEntry);
-
-		FinderCacheUtil.putResult(_finderPathFetchByC_C,
-			new Object[] { assetEntry.getClassNameId(), assetEntry.getClassPK() },
-			assetEntry);
-
-		assetEntry.resetOriginalValues();
-	}
-
-	/**
-	 * Caches the asset entries in the entity cache if it is enabled.
-	 *
-	 * @param assetEntries the asset entries
-	 */
-	@Override
-	public void cacheResult(List<AssetEntry> assetEntries) {
-		for (AssetEntry assetEntry : assetEntries) {
-			if (EntityCacheUtil.getResult(
-						AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-						AssetEntryImpl.class, assetEntry.getPrimaryKey()) == null) {
-				cacheResult(assetEntry);
-			}
-			else {
-				assetEntry.resetOriginalValues();
-			}
-		}
-	}
-
-	/**
-	 * Clears the cache for all asset entries.
-	 *
-	 * <p>
-	 * The {@link EntityCache} and {@link com.liferay.portal.kernel.dao.orm.FinderCache} are both cleared by this method.
-	 * </p>
-	 */
-	@Override
-	public void clearCache() {
-		EntityCacheUtil.clearCache(AssetEntryImpl.class);
-
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_ENTITY);
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
-	}
-
-	/**
-	 * Clears the cache for the asset entry.
-	 *
-	 * <p>
-	 * The {@link EntityCache} and {@link com.liferay.portal.kernel.dao.orm.FinderCache} are both cleared by this method.
-	 * </p>
-	 */
-	@Override
-	public void clearCache(AssetEntry assetEntry) {
-		EntityCacheUtil.removeResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-			AssetEntryImpl.class, assetEntry.getPrimaryKey());
-
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
-
-		clearUniqueFindersCache((AssetEntryModelImpl)assetEntry, true);
-	}
-
-	@Override
-	public void clearCache(List<AssetEntry> assetEntries) {
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
-
-		for (AssetEntry assetEntry : assetEntries) {
-			EntityCacheUtil.removeResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryImpl.class, assetEntry.getPrimaryKey());
-
-			clearUniqueFindersCache((AssetEntryModelImpl)assetEntry, true);
-		}
-	}
-
-	protected void cacheUniqueFindersCache(
-		AssetEntryModelImpl assetEntryModelImpl) {
-		Object[] args = new Object[] {
-				assetEntryModelImpl.getGroupId(),
-				assetEntryModelImpl.getClassUuid()
-			};
-
-		FinderCacheUtil.putResult(_finderPathCountByG_CU, args,
-			Long.valueOf(1), false);
-		FinderCacheUtil.putResult(_finderPathFetchByG_CU, args,
-			assetEntryModelImpl, false);
-
-		args = new Object[] {
-				assetEntryModelImpl.getClassNameId(),
-				assetEntryModelImpl.getClassPK()
-			};
-
-		FinderCacheUtil.putResult(_finderPathCountByC_C, args, Long.valueOf(1),
-			false);
-		FinderCacheUtil.putResult(_finderPathFetchByC_C, args,
-			assetEntryModelImpl, false);
-	}
-
-	protected void clearUniqueFindersCache(
-		AssetEntryModelImpl assetEntryModelImpl, boolean clearCurrent) {
-		if (clearCurrent) {
-			Object[] args = new Object[] {
-					assetEntryModelImpl.getGroupId(),
-					assetEntryModelImpl.getClassUuid()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByG_CU, args);
-			FinderCacheUtil.removeResult(_finderPathFetchByG_CU, args);
-		}
-
-		if ((assetEntryModelImpl.getColumnBitmask() &
-				_finderPathFetchByG_CU.getColumnBitmask()) != 0) {
-			Object[] args = new Object[] {
-					assetEntryModelImpl.getOriginalGroupId(),
-					assetEntryModelImpl.getOriginalClassUuid()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByG_CU, args);
-			FinderCacheUtil.removeResult(_finderPathFetchByG_CU, args);
-		}
-
-		if (clearCurrent) {
-			Object[] args = new Object[] {
-					assetEntryModelImpl.getClassNameId(),
-					assetEntryModelImpl.getClassPK()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByC_C, args);
-			FinderCacheUtil.removeResult(_finderPathFetchByC_C, args);
-		}
-
-		if ((assetEntryModelImpl.getColumnBitmask() &
-				_finderPathFetchByC_C.getColumnBitmask()) != 0) {
-			Object[] args = new Object[] {
-					assetEntryModelImpl.getOriginalClassNameId(),
-					assetEntryModelImpl.getOriginalClassPK()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByC_C, args);
-			FinderCacheUtil.removeResult(_finderPathFetchByC_C, args);
-		}
-	}
-
-	/**
-	 * Creates a new asset entry with the primary key. Does not add the asset entry to the database.
-	 *
-	 * @param entryId the primary key for the new asset entry
-	 * @return the new asset entry
-	 */
-	@Override
-	public AssetEntry create(long entryId) {
-		AssetEntry assetEntry = new AssetEntryImpl();
-
-		assetEntry.setNew(true);
-		assetEntry.setPrimaryKey(entryId);
-
-		assetEntry.setCompanyId(companyProvider.getCompanyId());
-
-		return assetEntry;
-	}
-
-	/**
-	 * Removes the asset entry with the primary key from the database. Also notifies the appropriate model listeners.
-	 *
-	 * @param entryId the primary key of the asset entry
-	 * @return the asset entry that was removed
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry remove(long entryId) throws NoSuchEntryException {
-		return remove((Serializable)entryId);
-	}
-
-	/**
-	 * Removes the asset entry with the primary key from the database. Also notifies the appropriate model listeners.
-	 *
-	 * @param primaryKey the primary key of the asset entry
-	 * @return the asset entry that was removed
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry remove(Serializable primaryKey)
-		throws NoSuchEntryException {
-		Session session = null;
-
-		try {
-			session = openSession();
-
-			AssetEntry assetEntry = (AssetEntry)session.get(AssetEntryImpl.class,
-					primaryKey);
-
-			if (assetEntry == null) {
-				if (_log.isDebugEnabled()) {
-					_log.debug(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY + primaryKey);
-				}
-
-				throw new NoSuchEntryException(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY +
-					primaryKey);
-			}
-
-			return remove(assetEntry);
-		}
-		catch (NoSuchEntryException nsee) {
-			throw nsee;
-		}
-		catch (Exception e) {
-			throw processException(e);
-		}
-		finally {
-			closeSession(session);
-		}
-	}
-
-	@Override
-	protected AssetEntry removeImpl(AssetEntry assetEntry) {
-		assetEntryToAssetCategoryTableMapper.deleteLeftPrimaryKeyTableMappings(assetEntry.getPrimaryKey());
-
-		assetEntryToAssetTagTableMapper.deleteLeftPrimaryKeyTableMappings(assetEntry.getPrimaryKey());
-
-		Session session = null;
-
-		try {
-			session = openSession();
-
-			if (!session.contains(assetEntry)) {
-				assetEntry = (AssetEntry)session.get(AssetEntryImpl.class,
-						assetEntry.getPrimaryKeyObj());
-			}
-
-			if (assetEntry != null) {
-				session.delete(assetEntry);
-			}
-		}
-		catch (Exception e) {
-			throw processException(e);
-		}
-		finally {
-			closeSession(session);
-		}
-
-		if (assetEntry != null) {
-			clearCache(assetEntry);
-		}
-
-		return assetEntry;
-	}
-
-	@Override
-	public AssetEntry updateImpl(AssetEntry assetEntry) {
-		boolean isNew = assetEntry.isNew();
-
-		if (!(assetEntry instanceof AssetEntryModelImpl)) {
-			InvocationHandler invocationHandler = null;
-
-			if (ProxyUtil.isProxyClass(assetEntry.getClass())) {
-				invocationHandler = ProxyUtil.getInvocationHandler(assetEntry);
-
-				throw new IllegalArgumentException(
-					"Implement ModelWrapper in assetEntry proxy " +
-					invocationHandler.getClass());
-			}
-
-			throw new IllegalArgumentException(
-				"Implement ModelWrapper in custom AssetEntry implementation " +
-				assetEntry.getClass());
-		}
-
-		AssetEntryModelImpl assetEntryModelImpl = (AssetEntryModelImpl)assetEntry;
-
-		ServiceContext serviceContext = ServiceContextThreadLocal.getServiceContext();
-
-		Date now = new Date();
-
-		if (isNew && (assetEntry.getCreateDate() == null)) {
-			if (serviceContext == null) {
-				assetEntry.setCreateDate(now);
-			}
-			else {
-				assetEntry.setCreateDate(serviceContext.getCreateDate(now));
-			}
-		}
-
-		if (!assetEntryModelImpl.hasSetModifiedDate()) {
-			if (serviceContext == null) {
-				assetEntry.setModifiedDate(now);
-			}
-			else {
-				assetEntry.setModifiedDate(serviceContext.getModifiedDate(now));
-			}
-		}
-
-		Session session = null;
-
-		try {
-			session = openSession();
-
-			if (assetEntry.isNew()) {
-				session.save(assetEntry);
-
-				assetEntry.setNew(false);
-			}
-			else {
-				assetEntry = (AssetEntry)session.merge(assetEntry);
-			}
-		}
-		catch (Exception e) {
-			throw processException(e);
-		}
-		finally {
-			closeSession(session);
-		}
-
-		FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
-
-		if (!AssetEntryModelImpl.COLUMN_BITMASK_ENABLED) {
-			FinderCacheUtil.clearCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
-		}
-		else
-		 if (isNew) {
-			Object[] args = new Object[] { assetEntryModelImpl.getGroupId() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByGroupId, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByGroupId,
-				args);
-
-			args = new Object[] { assetEntryModelImpl.getCompanyId() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByCompanyId, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByCompanyId,
-				args);
-
-			args = new Object[] { assetEntryModelImpl.isVisible() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByVisible, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByVisible,
-				args);
-
-			args = new Object[] { assetEntryModelImpl.getPublishDate() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByPublishDate, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByPublishDate,
-				args);
-
-			args = new Object[] { assetEntryModelImpl.getExpirationDate() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByExpirationDate, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByExpirationDate,
-				args);
-
-			args = new Object[] { assetEntryModelImpl.getLayoutUuid() };
-
-			FinderCacheUtil.removeResult(_finderPathCountByLayoutUuid, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByLayoutUuid,
-				args);
-
-			args = new Object[] {
-					assetEntryModelImpl.getGroupId(),
-					assetEntryModelImpl.getClassNameId(),
-					assetEntryModelImpl.isVisible()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByG_C_V, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_V,
-				args);
-
-			args = new Object[] {
-					assetEntryModelImpl.getGroupId(),
-					assetEntryModelImpl.getClassNameId(),
-					assetEntryModelImpl.getPublishDate(),
-					assetEntryModelImpl.getExpirationDate()
-				};
-
-			FinderCacheUtil.removeResult(_finderPathCountByG_C_P_E, args);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_P_E,
-				args);
-
-			FinderCacheUtil.removeResult(_finderPathCountAll, FINDER_ARGS_EMPTY);
-			FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindAll,
-				FINDER_ARGS_EMPTY);
-		}
-
-		else {
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByGroupId.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalGroupId()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByGroupId, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByGroupId,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.getGroupId() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByGroupId, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByGroupId,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByCompanyId.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalCompanyId()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByCompanyId, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByCompanyId,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.getCompanyId() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByCompanyId, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByCompanyId,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByVisible.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalVisible()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByVisible, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByVisible,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.isVisible() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByVisible, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByVisible,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByPublishDate.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalPublishDate()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByPublishDate, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByPublishDate,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.getPublishDate() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByPublishDate, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByPublishDate,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByExpirationDate.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalExpirationDate()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByExpirationDate,
-					args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByExpirationDate,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.getExpirationDate() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByExpirationDate,
-					args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByExpirationDate,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByLayoutUuid.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalLayoutUuid()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByLayoutUuid, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByLayoutUuid,
-					args);
-
-				args = new Object[] { assetEntryModelImpl.getLayoutUuid() };
-
-				FinderCacheUtil.removeResult(_finderPathCountByLayoutUuid, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByLayoutUuid,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByG_C_V.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalGroupId(),
-						assetEntryModelImpl.getOriginalClassNameId(),
-						assetEntryModelImpl.getOriginalVisible()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByG_C_V, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_V,
-					args);
-
-				args = new Object[] {
-						assetEntryModelImpl.getGroupId(),
-						assetEntryModelImpl.getClassNameId(),
-						assetEntryModelImpl.isVisible()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByG_C_V, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_V,
-					args);
-			}
-
-			if ((assetEntryModelImpl.getColumnBitmask() &
-					_finderPathWithoutPaginationFindByG_C_P_E.getColumnBitmask()) != 0) {
-				Object[] args = new Object[] {
-						assetEntryModelImpl.getOriginalGroupId(),
-						assetEntryModelImpl.getOriginalClassNameId(),
-						assetEntryModelImpl.getOriginalPublishDate(),
-						assetEntryModelImpl.getOriginalExpirationDate()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByG_C_P_E, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_P_E,
-					args);
-
-				args = new Object[] {
-						assetEntryModelImpl.getGroupId(),
-						assetEntryModelImpl.getClassNameId(),
-						assetEntryModelImpl.getPublishDate(),
-						assetEntryModelImpl.getExpirationDate()
-					};
-
-				FinderCacheUtil.removeResult(_finderPathCountByG_C_P_E, args);
-				FinderCacheUtil.removeResult(_finderPathWithoutPaginationFindByG_C_P_E,
-					args);
-			}
-		}
-
-		EntityCacheUtil.putResult(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-			AssetEntryImpl.class, assetEntry.getPrimaryKey(), assetEntry, false);
-
-		clearUniqueFindersCache(assetEntryModelImpl, false);
-		cacheUniqueFindersCache(assetEntryModelImpl);
-
-		assetEntry.resetOriginalValues();
-
-		return assetEntry;
-	}
-
-	/**
-	 * Returns the asset entry with the primary key or throws a {@link com.liferay.portal.kernel.exception.NoSuchModelException} if it could not be found.
-	 *
-	 * @param primaryKey the primary key of the asset entry
-	 * @return the asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry findByPrimaryKey(Serializable primaryKey)
-		throws NoSuchEntryException {
-		AssetEntry assetEntry = fetchByPrimaryKey(primaryKey);
-
-		if (assetEntry == null) {
-			if (_log.isDebugEnabled()) {
-				_log.debug(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY + primaryKey);
-			}
-
-			throw new NoSuchEntryException(_NO_SUCH_ENTITY_WITH_PRIMARY_KEY +
-				primaryKey);
-		}
-
-		return assetEntry;
-	}
-
-	/**
-	 * Returns the asset entry with the primary key or throws a {@link NoSuchEntryException} if it could not be found.
-	 *
-	 * @param entryId the primary key of the asset entry
-	 * @return the asset entry
-	 * @throws NoSuchEntryException if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry findByPrimaryKey(long entryId)
-		throws NoSuchEntryException {
-		return findByPrimaryKey((Serializable)entryId);
-	}
-
-	/**
-	 * Returns the asset entry with the primary key or returns <code>null</code> if it could not be found.
-	 *
-	 * @param entryId the primary key of the asset entry
-	 * @return the asset entry, or <code>null</code> if a asset entry with the primary key could not be found
-	 */
-	@Override
-	public AssetEntry fetchByPrimaryKey(long entryId) {
-		return fetchByPrimaryKey((Serializable)entryId);
-	}
-
-	/**
-	 * Returns all the asset entries.
-	 *
-	 * @return the asset entries
-	 */
-	@Override
-	public List<AssetEntry> findAll() {
-		return findAll(QueryUtil.ALL_POS, QueryUtil.ALL_POS, null);
-	}
-
-	/**
-	 * Returns a range of all the asset entries.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @return the range of asset entries
-	 */
-	@Override
-	public List<AssetEntry> findAll(int start, int end) {
-		return findAll(start, end, null);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @return the ordered range of asset entries
-	 */
-	@Override
-	public List<AssetEntry> findAll(int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator) {
-		return findAll(start, end, orderByComparator, true);
-	}
-
-	/**
-	 * Returns an ordered range of all the asset entries.
-	 *
-	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
-	 * </p>
-	 *
-	 * @param start the lower bound of the range of asset entries
-	 * @param end the upper bound of the range of asset entries (not inclusive)
-	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
-	 * @param retrieveFromCache whether to retrieve from the finder cache
-	 * @return the ordered range of asset entries
-	 */
-	@Override
-	public List<AssetEntry> findAll(int start, int end,
-		OrderByComparator<AssetEntry> orderByComparator,
-		boolean retrieveFromCache) {
-		boolean pagination = true;
-		FinderPath finderPath = null;
-		Object[] finderArgs = null;
-
-		if ((start == QueryUtil.ALL_POS) && (end == QueryUtil.ALL_POS) &&
-				(orderByComparator == null)) {
-			pagination = false;
-			finderPath = _finderPathWithoutPaginationFindAll;
-			finderArgs = FINDER_ARGS_EMPTY;
-		}
-		else {
-			finderPath = _finderPathWithPaginationFindAll;
-			finderArgs = new Object[] { start, end, orderByComparator };
-		}
-
-		List<AssetEntry> list = null;
-
-		if (retrieveFromCache) {
-			list = (List<AssetEntry>)FinderCacheUtil.getResult(finderPath,
-					finderArgs, this);
-		}
-
-		if (list == null) {
-			StringBundler query = null;
-			String sql = null;
-
-			if (orderByComparator != null) {
-				query = new StringBundler(2 +
-						(orderByComparator.getOrderByFields().length * 2));
-
-				query.append(_SQL_SELECT_ASSETENTRY);
-
-				appendOrderByComparator(query, _ORDER_BY_ENTITY_ALIAS,
-					orderByComparator);
-
-				sql = query.toString();
-			}
-			else {
-				sql = _SQL_SELECT_ASSETENTRY;
-
-				if (pagination) {
-					sql = sql.concat(AssetEntryModelImpl.ORDER_BY_JPQL);
-				}
-			}
-
-			Session session = null;
-
-			try {
-				session = openSession();
-
-				Query q = session.createQuery(sql);
-
-				if (!pagination) {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end, false);
-
-					Collections.sort(list);
-
-					list = Collections.unmodifiableList(list);
-				}
-				else {
-					list = (List<AssetEntry>)QueryUtil.list(q, getDialect(),
-							start, end);
-				}
-
-				cacheResult(list);
-
-				FinderCacheUtil.putResult(finderPath, finderArgs, list);
-			}
-			catch (Exception e) {
-				FinderCacheUtil.removeResult(finderPath, finderArgs);
-
-				throw processException(e);
-			}
-			finally {
-				closeSession(session);
-			}
-		}
-
-		return list;
-	}
-
-	/**
-	 * Removes all the asset entries from the database.
-	 *
-	 */
-	@Override
-	public void removeAll() {
-		for (AssetEntry assetEntry : findAll()) {
-			remove(assetEntry);
-		}
 	}
 
 	/**
 	 * Returns the number of asset entries.
 	 *
 	 * @return the number of asset entries
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public int countAll() {
-		Long count = (Long)FinderCacheUtil.getResult(_finderPathCountAll,
+	public int countAll() throws SystemException {
+		Long count = (Long)FinderCacheUtil.getResult(FINDER_PATH_COUNT_ALL,
 				FINDER_ARGS_EMPTY, this);
 
 		if (count == null) {
@@ -5622,17 +3715,18 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 				Query q = session.createQuery(_SQL_COUNT_ASSETENTRY);
 
 				count = (Long)q.uniqueResult();
-
-				FinderCacheUtil.putResult(_finderPathCountAll,
-					FINDER_ARGS_EMPTY, count);
 			}
 			catch (Exception e) {
-				FinderCacheUtil.removeResult(_finderPathCountAll,
-					FINDER_ARGS_EMPTY);
-
 				throw processException(e);
 			}
 			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				FinderCacheUtil.putResult(FINDER_PATH_COUNT_ALL,
+						FINDER_ARGS_EMPTY, count);
+
 				closeSession(session);
 			}
 		}
@@ -5640,28 +3734,32 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		return count.intValue();
 	}
 
-	/**
-	 * Returns the primaryKeys of asset categories associated with the asset entry.
-	 *
-	 * @param pk the primary key of the asset entry
-	 * @return long[] of the primaryKeys of asset categories associated with the asset entry
-	 */
-	@Override
-	public long[] getAssetCategoryPrimaryKeys(long pk) {
-		long[] pks = assetEntryToAssetCategoryTableMapper.getRightPrimaryKeys(pk);
+	protected Long getGroupIdFromPK(long pk) {
+		Long groupId = 0L;
 
-		return pks.clone();
+		try {
+			AssetEntry entry = fetchByPrimaryKey(pk);
+
+			if (entry != null) {
+				return entry.getGroupId();
+			}
+		}
+		catch (Exception ex) {
+		}
+
+		return groupId;
 	}
+
 
 	/**
 	 * Returns all the asset categories associated with the asset entry.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @return the asset categories associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetCategory> getAssetCategories(
-		long pk) {
+	public List<com.liferay.portlet.asset.model.AssetCategory> getAssetCategories(
+			long pk) throws SystemException {
 		return getAssetCategories(pk, QueryUtil.ALL_POS, QueryUtil.ALL_POS);
 	}
 
@@ -5669,25 +3767,39 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns a range of all the asset categories associated with the asset entry.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of asset categories associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetCategory> getAssetCategories(
-		long pk, int start, int end) {
+	public List<com.liferay.portlet.asset.model.AssetCategory> getAssetCategories(
+			long pk, int start, int end) throws SystemException {
 		return getAssetCategories(pk, start, end, null);
+	}
+
+	public static final PartitionFinderPath FINDER_PATH_GET_ASSETCATEGORIES = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetCategoryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETCATEGORIES,
+			com.liferay.portlet.asset.model.impl.AssetCategoryImpl.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME,
+			"getAssetCategories",
+			new String[] {
+					Long.class.getName(), "java.lang.Integer", "java.lang.Integer",
+					"com.liferay.portal.kernel.util.OrderByComparator"
+			});
+
+	static {
+		FINDER_PATH_GET_ASSETCATEGORIES.setCacheKeyGeneratorCacheName(null);
 	}
 
 	/**
 	 * Returns an ordered range of all the asset categories associated with the asset entry.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param pk the primary key of the asset entry
@@ -5695,13 +3807,76 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of asset categories associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetCategory> getAssetCategories(
-		long pk, int start, int end,
-		OrderByComparator<com.liferay.asset.kernel.model.AssetCategory> orderByComparator) {
-		return assetEntryToAssetCategoryTableMapper.getRightBaseModels(pk,
-			start, end, orderByComparator);
+	public List<com.liferay.portlet.asset.model.AssetCategory> getAssetCategories(
+			long pk, int start, int end, OrderByComparator orderByComparator)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { pk, start, end, orderByComparator };
+
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+
+		List<com.liferay.portlet.asset.model.AssetCategory> list = (List<com.liferay.portlet.asset.model.AssetCategory>)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_GET_ASSETCATEGORIES,
+				finderArgs, this);
+
+		if (list == null) {
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				String sql = null;
+
+				if (orderByComparator != null) {
+					sql = _SQL_GETASSETCATEGORIES.concat(ORDER_BY_CLAUSE)
+							.concat(orderByComparator.getOrderBy());
+				}
+				else {
+					sql = _SQL_GETASSETCATEGORIES.concat(com.liferay.portlet.asset.model.impl.AssetCategoryModelImpl.ORDER_BY_SQL);
+				}
+
+				SQLQuery q = session.createSQLQuery(sql);
+
+				q.addEntity("AssetCategory",
+						com.liferay.portlet.asset.model.impl.AssetCategoryImpl.class);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				qPos.add(pk);
+
+				list = (List<com.liferay.portlet.asset.model.AssetCategory>)QueryUtil.list(q,
+						getDialect(), start, end);
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (list == null) {
+					PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_GET_ASSETCATEGORIES,
+							finderArgs);
+				}
+				else {
+					assetCategoryPersistence.cacheResult(list);
+
+					PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_GET_ASSETCATEGORIES,
+							finderArgs, list);
+				}
+
+				closeSession(session);
+			}
+		}
+
+		return list;
+	}
+
+	public static final PartitionFinderPath FINDER_PATH_GET_ASSETCATEGORIES_SIZE = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetCategoryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETCATEGORIES,
+			Long.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME,
+			"getAssetCategoriesSize", new String[] { Long.class.getName() });
+
+	static {
+		FINDER_PATH_GET_ASSETCATEGORIES_SIZE.setCacheKeyGeneratorCacheName(null);
 	}
 
 	/**
@@ -5709,13 +3884,57 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @return the number of asset categories associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public int getAssetCategoriesSize(long pk) {
-		long[] pks = assetEntryToAssetCategoryTableMapper.getRightPrimaryKeys(pk);
+	public int getAssetCategoriesSize(long pk) throws SystemException {
+		Object[] finderArgs = new Object[] { pk };
 
-		return pks.length;
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+
+		Long count = (Long)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_GET_ASSETCATEGORIES_SIZE,
+				finderArgs, this);
+
+		if (count == null) {
+			Session session = null;
+
+			try {
+				session = openSession();
+
+				SQLQuery q = session.createSQLQuery(_SQL_GETASSETCATEGORIESSIZE);
+
+				q.addScalar(COUNT_COLUMN_NAME,
+						com.liferay.portal.kernel.dao.orm.Type.LONG);
+
+				QueryPos qPos = QueryPos.getInstance(q);
+
+				qPos.add(pk);
+
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+
+				PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_GET_ASSETCATEGORIES_SIZE,
+						finderArgs, count);
+
+				closeSession(session);
+			}
+		}
+
+		return count.intValue();
 	}
+
+	public static final PartitionFinderPath FINDER_PATH_CONTAINS_ASSETCATEGORY = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetCategoryModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETCATEGORIES,
+			Boolean.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME,
+			"containsAssetCategory",
+			new String[] { Long.class.getName(), Long.class.getName() });
 
 	/**
 	 * Returns <code>true</code> if the asset category is associated with the asset entry.
@@ -5723,11 +3942,36 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPK the primary key of the asset category
 	 * @return <code>true</code> if the asset category is associated with the asset entry; <code>false</code> otherwise
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public boolean containsAssetCategory(long pk, long assetCategoryPK) {
-		return assetEntryToAssetCategoryTableMapper.containsTableMapping(pk,
-			assetCategoryPK);
+	public boolean containsAssetCategory(long pk, long assetCategoryPK)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { pk, assetCategoryPK };
+
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+
+		Boolean value = (Boolean)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_CONTAINS_ASSETCATEGORY,
+				finderArgs, this);
+
+		if (value == null) {
+			try {
+				value = Boolean.valueOf(containsAssetCategory.contains(pk,
+						assetCategoryPK));
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (value == null) {
+					value = Boolean.FALSE;
+				}
+
+				PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_CONTAINS_ASSETCATEGORY,
+						finderArgs, value);
+			}
+		}
+
+		return value.booleanValue();
 	}
 
 	/**
@@ -5735,9 +3979,9 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry to check for associations with asset categories
 	 * @return <code>true</code> if the asset entry has any asset categories associated with it; <code>false</code> otherwise
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public boolean containsAssetCategories(long pk) {
+	public boolean containsAssetCategories(long pk) throws SystemException {
 		if (getAssetCategoriesSize(pk) > 0) {
 			return true;
 		}
@@ -5751,18 +3995,18 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPK the primary key of the asset category
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void addAssetCategory(long pk, long assetCategoryPK) {
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			assetEntryToAssetCategoryTableMapper.addTableMapping(companyProvider.getCompanyId(),
-				pk, assetCategoryPK);
+	public void addAssetCategory(long pk, long assetCategoryPK)
+			throws SystemException {
+		try {
+			addAssetCategory.add(pk, assetCategoryPK);
 		}
-		else {
-			assetEntryToAssetCategoryTableMapper.addTableMapping(assetEntry.getCompanyId(),
-				pk, assetCategoryPK);
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
 		}
 	}
 
@@ -5771,19 +4015,19 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategory the asset category
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void addAssetCategory(long pk,
-		com.liferay.asset.kernel.model.AssetCategory assetCategory) {
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			assetEntryToAssetCategoryTableMapper.addTableMapping(companyProvider.getCompanyId(),
-				pk, assetCategory.getPrimaryKey());
+								 com.liferay.portlet.asset.model.AssetCategory assetCategory)
+			throws SystemException {
+		try {
+			addAssetCategory.add(pk, assetCategory.getPrimaryKey());
 		}
-		else {
-			assetEntryToAssetCategoryTableMapper.addTableMapping(assetEntry.getCompanyId(),
-				pk, assetCategory.getPrimaryKey());
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
 		}
 	}
 
@@ -5792,22 +4036,21 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPKs the primary keys of the asset categories
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void addAssetCategories(long pk, long[] assetCategoryPKs) {
-		long companyId = 0;
-
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			companyId = companyProvider.getCompanyId();
+	public void addAssetCategories(long pk, long[] assetCategoryPKs)
+			throws SystemException {
+		try {
+			for (long assetCategoryPK : assetCategoryPKs) {
+				addAssetCategory.add(pk, assetCategoryPK);
+			}
 		}
-		else {
-			companyId = assetEntry.getCompanyId();
+		catch (Exception e) {
+			throw processException(e);
 		}
-
-		assetEntryToAssetCategoryTableMapper.addTableMappings(companyId, pk,
-			assetCategoryPKs);
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5815,23 +4058,40 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategories the asset categories
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void addAssetCategories(long pk,
-		List<com.liferay.asset.kernel.model.AssetCategory> assetCategories) {
-		addAssetCategories(pk,
-			ListUtil.toLongArray(assetCategories,
-				com.liferay.asset.kernel.model.AssetCategory.CATEGORY_ID_ACCESSOR));
+								   List<com.liferay.portlet.asset.model.AssetCategory> assetCategories)
+			throws SystemException {
+		try {
+			for (com.liferay.portlet.asset.model.AssetCategory assetCategory : assetCategories) {
+				addAssetCategory.add(pk, assetCategory.getPrimaryKey());
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
 	 * Clears all associations between the asset entry and its asset categories. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry to clear the associated asset categories from
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void clearAssetCategories(long pk) {
-		assetEntryToAssetCategoryTableMapper.deleteLeftPrimaryKeyTableMappings(pk);
+	public void clearAssetCategories(long pk) throws SystemException {
+		try {
+			clearAssetCategories.clear(pk);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5839,11 +4099,19 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPK the primary key of the asset category
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void removeAssetCategory(long pk, long assetCategoryPK) {
-		assetEntryToAssetCategoryTableMapper.deleteTableMapping(pk,
-			assetCategoryPK);
+	public void removeAssetCategory(long pk, long assetCategoryPK)
+			throws SystemException {
+		try {
+			removeAssetCategory.remove(pk, assetCategoryPK);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5851,12 +4119,20 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategory the asset category
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void removeAssetCategory(long pk,
-		com.liferay.asset.kernel.model.AssetCategory assetCategory) {
-		assetEntryToAssetCategoryTableMapper.deleteTableMapping(pk,
-			assetCategory.getPrimaryKey());
+									com.liferay.portlet.asset.model.AssetCategory assetCategory)
+			throws SystemException {
+		try {
+			removeAssetCategory.remove(pk, assetCategory.getPrimaryKey());
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5864,11 +4140,21 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPKs the primary keys of the asset categories
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void removeAssetCategories(long pk, long[] assetCategoryPKs) {
-		assetEntryToAssetCategoryTableMapper.deleteTableMappings(pk,
-			assetCategoryPKs);
+	public void removeAssetCategories(long pk, long[] assetCategoryPKs)
+			throws SystemException {
+		try {
+			for (long assetCategoryPK : assetCategoryPKs) {
+				removeAssetCategory.remove(pk, assetCategoryPK);
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5876,13 +4162,22 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategories the asset categories
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void removeAssetCategories(long pk,
-		List<com.liferay.asset.kernel.model.AssetCategory> assetCategories) {
-		removeAssetCategories(pk,
-			ListUtil.toLongArray(assetCategories,
-				com.liferay.asset.kernel.model.AssetCategory.CATEGORY_ID_ACCESSOR));
+									  List<com.liferay.portlet.asset.model.AssetCategory> assetCategories)
+			throws SystemException {
+		try {
+			for (com.liferay.portlet.asset.model.AssetCategory assetCategory : assetCategories) {
+				removeAssetCategory.remove(pk, assetCategory.getPrimaryKey());
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5890,35 +4185,34 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategoryPKs the primary keys of the asset categories to be associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void setAssetCategories(long pk, long[] assetCategoryPKs) {
-		Set<Long> newAssetCategoryPKsSet = SetUtil.fromArray(assetCategoryPKs);
-		Set<Long> oldAssetCategoryPKsSet = SetUtil.fromArray(assetEntryToAssetCategoryTableMapper.getRightPrimaryKeys(
-					pk));
+	public void setAssetCategories(long pk, long[] assetCategoryPKs)
+			throws SystemException {
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+		Object[] finderArgs = new Object[] { pk, QueryUtil.ALL_POS, QueryUtil.ALL_POS, null };
+		try {
+			Set<Long> assetCategoryPKSet = SetUtil.fromArray(assetCategoryPKs);
 
-		Set<Long> removeAssetCategoryPKsSet = new HashSet<Long>(oldAssetCategoryPKsSet);
+			List<com.liferay.portlet.asset.model.AssetCategory> assetCategories = getAssetCategories(pk);
 
-		removeAssetCategoryPKsSet.removeAll(newAssetCategoryPKsSet);
+			for (com.liferay.portlet.asset.model.AssetCategory assetCategory : assetCategories) {
+				if (!assetCategoryPKSet.remove(assetCategory.getPrimaryKey())) {
+					removeAssetCategory.remove(pk, assetCategory.getPrimaryKey());
+				}
+			}
 
-		assetEntryToAssetCategoryTableMapper.deleteTableMappings(pk,
-			ArrayUtil.toLongArray(removeAssetCategoryPKsSet));
-
-		newAssetCategoryPKsSet.removeAll(oldAssetCategoryPKsSet);
-
-		long companyId = 0;
-
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			companyId = companyProvider.getCompanyId();
+			for (Long assetCategoryPK : assetCategoryPKSet) {
+				addAssetCategory.add(pk, assetCategoryPK);
+			}
 		}
-		else {
-			companyId = assetEntry.getCompanyId();
+		catch (Exception e) {
+			throw processException(e);
 		}
-
-		assetEntryToAssetCategoryTableMapper.addTableMappings(companyId, pk,
-			ArrayUtil.toLongArray(newAssetCategoryPKsSet));
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+			PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_GET_ASSETCATEGORIES, finderArgs );
+		}
 	}
 
 	/**
@@ -5926,15 +4220,16 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetCategories the asset categories to be associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void setAssetCategories(long pk,
-		List<com.liferay.asset.kernel.model.AssetCategory> assetCategories) {
+								   List<com.liferay.portlet.asset.model.AssetCategory> assetCategories)
+			throws SystemException {
 		try {
 			long[] assetCategoryPKs = new long[assetCategories.size()];
 
 			for (int i = 0; i < assetCategories.size(); i++) {
-				com.liferay.asset.kernel.model.AssetCategory assetCategory = assetCategories.get(i);
+				com.liferay.portlet.asset.model.AssetCategory assetCategory = assetCategories.get(i);
 
 				assetCategoryPKs[i] = assetCategory.getPrimaryKey();
 			}
@@ -5944,19 +4239,9 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 		catch (Exception e) {
 			throw processException(e);
 		}
-	}
-
-	/**
-	 * Returns the primaryKeys of asset tags associated with the asset entry.
-	 *
-	 * @param pk the primary key of the asset entry
-	 * @return long[] of the primaryKeys of asset tags associated with the asset entry
-	 */
-	@Override
-	public long[] getAssetTagPrimaryKeys(long pk) {
-		long[] pks = assetEntryToAssetTagTableMapper.getRightPrimaryKeys(pk);
-
-		return pks.clone();
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETCATEGORIES_NAME);
+		}
 	}
 
 	/**
@@ -5964,9 +4249,10 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @return the asset tags associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetTag> getAssetTags(long pk) {
+	public List<com.liferay.portlet.asset.model.AssetTag> getAssetTags(long pk)
+			throws SystemException {
 		return getAssetTags(pk, QueryUtil.ALL_POS, QueryUtil.ALL_POS);
 	}
 
@@ -5974,25 +4260,39 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * Returns a range of all the asset tags associated with the asset entry.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param start the lower bound of the range of asset entries
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @return the range of asset tags associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetTag> getAssetTags(long pk,
-		int start, int end) {
+	public List<com.liferay.portlet.asset.model.AssetTag> getAssetTags(
+			long pk, int start, int end) throws SystemException {
 		return getAssetTags(pk, start, end, null);
+	}
+
+	public static final PartitionFinderPath FINDER_PATH_GET_ASSETTAGS = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetTagModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETTAGS,
+			com.liferay.portlet.asset.model.impl.AssetTagImpl.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME,
+			"getAssetTags",
+			new String[] {
+					Long.class.getName(), "java.lang.Integer", "java.lang.Integer",
+					"com.liferay.portal.kernel.util.OrderByComparator"
+			});
+
+	static {
+		FINDER_PATH_GET_ASSETTAGS.setCacheKeyGeneratorCacheName(null);
 	}
 
 	/**
 	 * Returns an ordered range of all the asset tags associated with the asset entry.
 	 *
 	 * <p>
-	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link QueryUtil#ALL_POS} will return the full result set. If <code>orderByComparator</code> is specified, then the query will include the given ORDER BY logic. If <code>orderByComparator</code> is absent and pagination is required (<code>start</code> and <code>end</code> are not {@link QueryUtil#ALL_POS}), then the query will include the default ORDER BY logic from {@link AssetEntryModelImpl}. If both <code>orderByComparator</code> and pagination are absent, for performance reasons, the query will not have an ORDER BY clause and the returned result set will be sorted on by the primary key in an ascending order.
+	 * Useful when paginating results. Returns a maximum of <code>end - start</code> instances. <code>start</code> and <code>end</code> are not primary keys, they are indexes in the result set. Thus, <code>0</code> refers to the first result in the set. Setting both <code>start</code> and <code>end</code> to {@link com.liferay.portal.kernel.dao.orm.QueryUtil#ALL_POS} will return the full result set.
 	 * </p>
 	 *
 	 * @param pk the primary key of the asset entry
@@ -6000,49 +4300,180 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 	 * @param end the upper bound of the range of asset entries (not inclusive)
 	 * @param orderByComparator the comparator to order the results by (optionally <code>null</code>)
 	 * @return the ordered range of asset tags associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public List<com.liferay.asset.kernel.model.AssetTag> getAssetTags(long pk,
-		int start, int end,
-		OrderByComparator<com.liferay.asset.kernel.model.AssetTag> orderByComparator) {
-		return assetEntryToAssetTagTableMapper.getRightBaseModels(pk, start,
-			end, orderByComparator);
+	public List<com.liferay.portlet.asset.model.AssetTag> getAssetTags(
+			long pk, int start, int end, OrderByComparator orderByComparator)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { pk, start, end, orderByComparator };
+		
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+		
+		List<com.liferay.portlet.asset.model.AssetTag> list = (List<com.liferay.portlet.asset.model.AssetTag>)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_GET_ASSETTAGS,
+				finderArgs, this);
+		
+		if (list == null) {
+			Session session = null;
+			
+			try {
+				session = openSession();
+				
+				String sql = null;
+				
+				if (orderByComparator != null) {
+					sql = _SQL_GETASSETTAGS.concat(ORDER_BY_CLAUSE)
+							.concat(orderByComparator.getOrderBy());
+				}
+				else {
+					sql = _SQL_GETASSETTAGS.concat(com.liferay.portlet.asset.model.impl.AssetTagModelImpl.ORDER_BY_SQL);
+				}
+				
+				SQLQuery q = session.createSQLQuery(sql);
+				
+				q.addEntity("AssetTag",
+						com.liferay.portlet.asset.model.impl.AssetTagImpl.class);
+				
+				QueryPos qPos = QueryPos.getInstance(q);
+				
+				qPos.add(pk);
+				
+				list = (List<com.liferay.portlet.asset.model.AssetTag>)QueryUtil.list(q,
+						getDialect(), start, end);
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (list == null) {
+					PartitionFinderCacheUtil.removeResult(partId, FINDER_PATH_GET_ASSETTAGS,
+							finderArgs);
+				}
+				else {
+					assetTagPersistence.cacheResult(list);
+					
+					PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_GET_ASSETTAGS,
+							finderArgs, list);
+				}
+				
+				closeSession(session);
+			}
+		}
+		
+		return list;
 	}
-
+	
+	public static final PartitionFinderPath FINDER_PATH_GET_ASSETTAGS_SIZE = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetTagModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETTAGS,
+			Long.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME,
+			"getAssetTagsSize", new String[] { Long.class.getName() });
+	
+	static {
+		FINDER_PATH_GET_ASSETTAGS_SIZE.setCacheKeyGeneratorCacheName(null);
+	}
+	
 	/**
 	 * Returns the number of asset tags associated with the asset entry.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @return the number of asset tags associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public int getAssetTagsSize(long pk) {
-		long[] pks = assetEntryToAssetTagTableMapper.getRightPrimaryKeys(pk);
-
-		return pks.length;
+	public int getAssetTagsSize(long pk) throws SystemException {
+		Object[] finderArgs = new Object[] { pk };
+		
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+		
+		Long count = (Long)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_GET_ASSETTAGS_SIZE,
+				finderArgs, this);
+		
+		if (count == null) {
+			Session session = null;
+			
+			try {
+				session = openSession();
+				
+				SQLQuery q = session.createSQLQuery(_SQL_GETASSETTAGSSIZE);
+				
+				q.addScalar(COUNT_COLUMN_NAME,
+						com.liferay.portal.kernel.dao.orm.Type.LONG);
+				
+				QueryPos qPos = QueryPos.getInstance(q);
+				
+				qPos.add(pk);
+				
+				count = (Long)q.uniqueResult();
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (count == null) {
+					count = Long.valueOf(0);
+				}
+				
+				PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_GET_ASSETTAGS_SIZE,
+						finderArgs, count);
+				
+				closeSession(session);
+			}
+		}
+		
+		return count.intValue();
 	}
-
+	
+	public static final PartitionFinderPath FINDER_PATH_CONTAINS_ASSETTAG = new PartitionFinderPath(com.liferay.portlet.asset.model.impl.AssetTagModelImpl.ENTITY_CACHE_ENABLED,
+			AssetEntryModelImpl.FINDER_CACHE_ENABLED_ASSETENTRIES_ASSETTAGS,
+			Boolean.class,
+			AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME,
+			"containsAssetTag",
+			new String[] { Long.class.getName(), Long.class.getName() });
+	
 	/**
 	 * Returns <code>true</code> if the asset tag is associated with the asset entry.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPK the primary key of the asset tag
 	 * @return <code>true</code> if the asset tag is associated with the asset entry; <code>false</code> otherwise
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public boolean containsAssetTag(long pk, long assetTagPK) {
-		return assetEntryToAssetTagTableMapper.containsTableMapping(pk,
-			assetTagPK);
+	public boolean containsAssetTag(long pk, long assetTagPK)
+			throws SystemException {
+		Object[] finderArgs = new Object[] { pk, assetTagPK };
+		
+		GroupPartitionID partId = new GroupPartitionID(getGroupIdFromPK(pk));
+		
+		Boolean value = (Boolean)PartitionFinderCacheUtil.getResult(partId, FINDER_PATH_CONTAINS_ASSETTAG,
+				finderArgs, this);
+		
+		if (value == null) {
+			try {
+				value = Boolean.valueOf(containsAssetTag.contains(pk, assetTagPK));
+			}
+			catch (Exception e) {
+				throw processException(e);
+			}
+			finally {
+				if (value == null) {
+					value = Boolean.FALSE;
+				}
+				
+				PartitionFinderCacheUtil.putResult(partId, FINDER_PATH_CONTAINS_ASSETTAG,
+						finderArgs, value);
+			}
+		}
+		
+		return value.booleanValue();
 	}
-
+	
 	/**
 	 * Returns <code>true</code> if the asset entry has any asset tags associated with it.
 	 *
 	 * @param pk the primary key of the asset entry to check for associations with asset tags
 	 * @return <code>true</code> if the asset entry has any asset tags associated with it; <code>false</code> otherwise
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public boolean containsAssetTags(long pk) {
+	public boolean containsAssetTags(long pk) throws SystemException {
 		if (getAssetTagsSize(pk) > 0) {
 			return true;
 		}
@@ -6050,495 +4481,734 @@ public class AssetEntryPersistenceImpl extends BasePersistenceImpl<AssetEntry>
 			return false;
 		}
 	}
-
+	
 	/**
 	 * Adds an association between the asset entry and the asset tag. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPK the primary key of the asset tag
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void addAssetTag(long pk, long assetTagPK) {
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			assetEntryToAssetTagTableMapper.addTableMapping(companyProvider.getCompanyId(),
-				pk, assetTagPK);
+	public void addAssetTag(long pk, long assetTagPK) throws SystemException {
+		try {
+			addAssetTag.add(pk, assetTagPK);
 		}
-		else {
-			assetEntryToAssetTagTableMapper.addTableMapping(assetEntry.getCompanyId(),
-				pk, assetTagPK);
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
 		}
 	}
-
+	
 	/**
 	 * Adds an association between the asset entry and the asset tag. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTag the asset tag
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void addAssetTag(long pk,
-		com.liferay.asset.kernel.model.AssetTag assetTag) {
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			assetEntryToAssetTagTableMapper.addTableMapping(companyProvider.getCompanyId(),
-				pk, assetTag.getPrimaryKey());
+							com.liferay.portlet.asset.model.AssetTag assetTag)
+			throws SystemException {
+		try {
+			addAssetTag.add(pk, assetTag.getPrimaryKey());
 		}
-		else {
-			assetEntryToAssetTagTableMapper.addTableMapping(assetEntry.getCompanyId(),
-				pk, assetTag.getPrimaryKey());
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
 		}
 	}
-
+	
 	/**
 	 * Adds an association between the asset entry and the asset tags. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPKs the primary keys of the asset tags
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void addAssetTags(long pk, long[] assetTagPKs) {
-		long companyId = 0;
-
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			companyId = companyProvider.getCompanyId();
+	public void addAssetTags(long pk, long[] assetTagPKs)
+			throws SystemException {
+		try {
+			for (long assetTagPK : assetTagPKs) {
+				addAssetTag.add(pk, assetTagPK);
+			}
 		}
-		else {
-			companyId = assetEntry.getCompanyId();
+		catch (Exception e) {
+			throw processException(e);
 		}
-
-		assetEntryToAssetTagTableMapper.addTableMappings(companyId, pk,
-			assetTagPKs);
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Adds an association between the asset entry and the asset tags. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTags the asset tags
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void addAssetTags(long pk,
-		List<com.liferay.asset.kernel.model.AssetTag> assetTags) {
-		addAssetTags(pk,
-			ListUtil.toLongArray(assetTags,
-				com.liferay.asset.kernel.model.AssetTag.TAG_ID_ACCESSOR));
+							 List<com.liferay.portlet.asset.model.AssetTag> assetTags)
+			throws SystemException {
+		try {
+			for (com.liferay.portlet.asset.model.AssetTag assetTag : assetTags) {
+				addAssetTag.add(pk, assetTag.getPrimaryKey());
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Clears all associations between the asset entry and its asset tags. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry to clear the associated asset tags from
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void clearAssetTags(long pk) {
-		assetEntryToAssetTagTableMapper.deleteLeftPrimaryKeyTableMappings(pk);
+	public void clearAssetTags(long pk) throws SystemException {
+		try {
+			clearAssetTags.clear(pk);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Removes the association between the asset entry and the asset tag. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPK the primary key of the asset tag
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void removeAssetTag(long pk, long assetTagPK) {
-		assetEntryToAssetTagTableMapper.deleteTableMapping(pk, assetTagPK);
+	public void removeAssetTag(long pk, long assetTagPK)
+			throws SystemException {
+		try {
+			removeAssetTag.remove(pk, assetTagPK);
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Removes the association between the asset entry and the asset tag. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTag the asset tag
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void removeAssetTag(long pk,
-		com.liferay.asset.kernel.model.AssetTag assetTag) {
-		assetEntryToAssetTagTableMapper.deleteTableMapping(pk,
-			assetTag.getPrimaryKey());
+							   com.liferay.portlet.asset.model.AssetTag assetTag)
+			throws SystemException {
+		try {
+			removeAssetTag.remove(pk, assetTag.getPrimaryKey());
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Removes the association between the asset entry and the asset tags. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPKs the primary keys of the asset tags
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void removeAssetTags(long pk, long[] assetTagPKs) {
-		assetEntryToAssetTagTableMapper.deleteTableMappings(pk, assetTagPKs);
+	public void removeAssetTags(long pk, long[] assetTagPKs)
+			throws SystemException {
+		try {
+			for (long assetTagPK : assetTagPKs) {
+				removeAssetTag.remove(pk, assetTagPK);
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Removes the association between the asset entry and the asset tags. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTags the asset tags
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void removeAssetTags(long pk,
-		List<com.liferay.asset.kernel.model.AssetTag> assetTags) {
-		removeAssetTags(pk,
-			ListUtil.toLongArray(assetTags,
-				com.liferay.asset.kernel.model.AssetTag.TAG_ID_ACCESSOR));
+								List<com.liferay.portlet.asset.model.AssetTag> assetTags)
+			throws SystemException {
+		try {
+			for (com.liferay.portlet.asset.model.AssetTag assetTag : assetTags) {
+				removeAssetTag.remove(pk, assetTag.getPrimaryKey());
+			}
+		}
+		catch (Exception e) {
+			throw processException(e);
+		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Sets the asset tags associated with the asset entry, removing and adding associations as necessary. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTagPKs the primary keys of the asset tags to be associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
-	public void setAssetTags(long pk, long[] assetTagPKs) {
-		Set<Long> newAssetTagPKsSet = SetUtil.fromArray(assetTagPKs);
-		Set<Long> oldAssetTagPKsSet = SetUtil.fromArray(assetEntryToAssetTagTableMapper.getRightPrimaryKeys(
-					pk));
-
-		Set<Long> removeAssetTagPKsSet = new HashSet<Long>(oldAssetTagPKsSet);
-
-		removeAssetTagPKsSet.removeAll(newAssetTagPKsSet);
-
-		assetEntryToAssetTagTableMapper.deleteTableMappings(pk,
-			ArrayUtil.toLongArray(removeAssetTagPKsSet));
-
-		newAssetTagPKsSet.removeAll(oldAssetTagPKsSet);
-
-		long companyId = 0;
-
-		AssetEntry assetEntry = fetchByPrimaryKey(pk);
-
-		if (assetEntry == null) {
-			companyId = companyProvider.getCompanyId();
+	public void setAssetTags(long pk, long[] assetTagPKs)
+			throws SystemException {
+		try {
+			Set<Long> assetTagPKSet = SetUtil.fromArray(assetTagPKs);
+			
+			List<com.liferay.portlet.asset.model.AssetTag> assetTags = getAssetTags(pk);
+			
+			for (com.liferay.portlet.asset.model.AssetTag assetTag : assetTags) {
+				if (!assetTagPKSet.remove(assetTag.getPrimaryKey())) {
+					removeAssetTag.remove(pk, assetTag.getPrimaryKey());
+				}
+			}
+			
+			for (Long assetTagPK : assetTagPKSet) {
+				addAssetTag.add(pk, assetTagPK);
+			}
 		}
-		else {
-			companyId = assetEntry.getCompanyId();
+		catch (Exception e) {
+			throw processException(e);
 		}
-
-		assetEntryToAssetTagTableMapper.addTableMappings(companyId, pk,
-			ArrayUtil.toLongArray(newAssetTagPKsSet));
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
+	
 	/**
 	 * Sets the asset tags associated with the asset entry, removing and adding associations as necessary. Also notifies the appropriate model listeners and clears the mapping table finder cache.
 	 *
 	 * @param pk the primary key of the asset entry
 	 * @param assetTags the asset tags to be associated with the asset entry
+	 * @throws SystemException if a system exception occurred
 	 */
-	@Override
 	public void setAssetTags(long pk,
-		List<com.liferay.asset.kernel.model.AssetTag> assetTags) {
+							 List<com.liferay.portlet.asset.model.AssetTag> assetTags)
+			throws SystemException {
 		try {
 			long[] assetTagPKs = new long[assetTags.size()];
-
+			
 			for (int i = 0; i < assetTags.size(); i++) {
-				com.liferay.asset.kernel.model.AssetTag assetTag = assetTags.get(i);
-
+				com.liferay.portlet.asset.model.AssetTag assetTag = assetTags.get(i);
+				
 				assetTagPKs[i] = assetTag.getPrimaryKey();
 			}
-
+			
 			setAssetTags(pk, assetTagPKs);
 		}
 		catch (Exception e) {
 			throw processException(e);
 		}
+		finally {
+			FinderCacheUtil.clearCache(AssetEntryModelImpl.MAPPING_TABLE_ASSETENTRIES_ASSETTAGS_NAME);
+		}
 	}
-
-	@Override
-	protected EntityCache getEntityCache() {
-		return EntityCacheUtil.getEntityCache();
-	}
-
-	@Override
-	protected String getPKDBName() {
-		return "entryId";
-	}
-
-	@Override
-	protected String getSelectSQL() {
-		return _SQL_SELECT_ASSETENTRY;
-	}
-
-	@Override
-	protected Map<String, Integer> getTableColumnsMap() {
-		return AssetEntryModelImpl.TABLE_COLUMNS_MAP;
-	}
-
+	
 	/**
 	 * Initializes the asset entry persistence.
 	 */
 	public void afterPropertiesSet() {
-		assetEntryToAssetCategoryTableMapper = TableMapperFactory.getTableMapper("AssetEntries_AssetCategories",
-				"companyId", "entryId", "categoryId", this,
-				assetCategoryPersistence);
-
-		assetEntryToAssetTagTableMapper = TableMapperFactory.getTableMapper("AssetEntries_AssetTags",
-				"companyId", "entryId", "tagId", this, assetTagPersistence);
-
-		_finderPathWithPaginationFindAll = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findAll", new String[0]);
-
-		_finderPathWithoutPaginationFindAll = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findAll",
-				new String[0]);
-
-		_finderPathCountAll = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countAll",
-				new String[0]);
-
-		_finderPathWithPaginationFindByGroupId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByGroupId",
-				new String[] {
-					Long.class.getName(),
+		String[] listenerClassNames = StringUtil.split(GetterUtil.getString(
+				com.liferay.portal.util.PropsUtil.get(
+						"value.object.listener.com.liferay.portlet.asset.model.AssetEntry")));
+		
+		if (listenerClassNames.length > 0) {
+			try {
+				List<ModelListener<AssetEntry>> listenersList = new ArrayList<ModelListener<AssetEntry>>();
+				
+				for (String listenerClassName : listenerClassNames) {
+					Class<?> clazz = getClass();
 					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByGroupId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByGroupId",
-				new String[] { Long.class.getName() },
-				AssetEntryModelImpl.GROUPID_COLUMN_BITMASK);
-
-		_finderPathCountByGroupId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByGroupId",
-				new String[] { Long.class.getName() });
-
-		_finderPathWithPaginationFindByCompanyId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByCompanyId",
-				new String[] {
-					Long.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByCompanyId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByCompanyId",
-				new String[] { Long.class.getName() },
-				AssetEntryModelImpl.COMPANYID_COLUMN_BITMASK);
-
-		_finderPathCountByCompanyId = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByCompanyId",
-				new String[] { Long.class.getName() });
-
-		_finderPathWithPaginationFindByVisible = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByVisible",
-				new String[] {
-					Boolean.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByVisible = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByVisible",
-				new String[] { Boolean.class.getName() },
-				AssetEntryModelImpl.VISIBLE_COLUMN_BITMASK);
-
-		_finderPathCountByVisible = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByVisible",
-				new String[] { Boolean.class.getName() });
-
-		_finderPathWithPaginationFindByPublishDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByPublishDate",
-				new String[] {
-					Date.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByPublishDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByPublishDate",
-				new String[] { Date.class.getName() },
-				AssetEntryModelImpl.PUBLISHDATE_COLUMN_BITMASK);
-
-		_finderPathCountByPublishDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION,
-				"countByPublishDate", new String[] { Date.class.getName() });
-
-		_finderPathWithPaginationFindByExpirationDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByExpirationDate",
-				new String[] {
-					Date.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByExpirationDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION,
-				"findByExpirationDate", new String[] { Date.class.getName() },
-				AssetEntryModelImpl.EXPIRATIONDATE_COLUMN_BITMASK);
-
-		_finderPathCountByExpirationDate = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION,
-				"countByExpirationDate", new String[] { Date.class.getName() });
-
-		_finderPathWithPaginationFindByLayoutUuid = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByLayoutUuid",
-				new String[] {
-					String.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByLayoutUuid = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByLayoutUuid",
-				new String[] { String.class.getName() },
-				AssetEntryModelImpl.LAYOUTUUID_COLUMN_BITMASK);
-
-		_finderPathCountByLayoutUuid = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByLayoutUuid",
-				new String[] { String.class.getName() });
-
-		_finderPathFetchByG_CU = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_ENTITY, "fetchByG_CU",
-				new String[] { Long.class.getName(), String.class.getName() },
-				AssetEntryModelImpl.GROUPID_COLUMN_BITMASK |
-				AssetEntryModelImpl.CLASSUUID_COLUMN_BITMASK);
-
-		_finderPathCountByG_CU = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByG_CU",
-				new String[] { Long.class.getName(), String.class.getName() });
-
-		_finderPathFetchByC_C = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_ENTITY, "fetchByC_C",
-				new String[] { Long.class.getName(), Long.class.getName() },
-				AssetEntryModelImpl.CLASSNAMEID_COLUMN_BITMASK |
-				AssetEntryModelImpl.CLASSPK_COLUMN_BITMASK);
-
-		_finderPathCountByC_C = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByC_C",
-				new String[] { Long.class.getName(), Long.class.getName() });
-
-		_finderPathWithPaginationFindByG_C_V = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByG_C_V",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Boolean.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByG_C_V = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByG_C_V",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Boolean.class.getName()
-				},
-				AssetEntryModelImpl.GROUPID_COLUMN_BITMASK |
-				AssetEntryModelImpl.CLASSNAMEID_COLUMN_BITMASK |
-				AssetEntryModelImpl.VISIBLE_COLUMN_BITMASK);
-
-		_finderPathCountByG_C_V = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByG_C_V",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Boolean.class.getName()
-				});
-
-		_finderPathWithPaginationFindByG_C_P_E = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITH_PAGINATION, "findByG_C_P_E",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Date.class.getName(), Date.class.getName(),
-					
-				Integer.class.getName(), Integer.class.getName(),
-					OrderByComparator.class.getName()
-				});
-
-		_finderPathWithoutPaginationFindByG_C_P_E = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, AssetEntryImpl.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "findByG_C_P_E",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Date.class.getName(), Date.class.getName()
-				},
-				AssetEntryModelImpl.GROUPID_COLUMN_BITMASK |
-				AssetEntryModelImpl.CLASSNAMEID_COLUMN_BITMASK |
-				AssetEntryModelImpl.PUBLISHDATE_COLUMN_BITMASK |
-				AssetEntryModelImpl.EXPIRATIONDATE_COLUMN_BITMASK);
-
-		_finderPathCountByG_C_P_E = new FinderPath(AssetEntryModelImpl.ENTITY_CACHE_ENABLED,
-				AssetEntryModelImpl.FINDER_CACHE_ENABLED, Long.class,
-				FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION, "countByG_C_P_E",
-				new String[] {
-					Long.class.getName(), Long.class.getName(),
-					Date.class.getName(), Date.class.getName()
-				});
+					listenersList.add((ModelListener<AssetEntry>)InstanceFactory.newInstance(
+							clazz.getClassLoader(), listenerClassName));
+				}
+				
+				listeners = listenersList.toArray(new ModelListener[listenersList.size()]);
+			}
+			catch (Exception e) {
+				_log.error(e);
+			}
+		}
+		
+		containsAssetCategory = new ContainsAssetCategory();
+		
+		addAssetCategory = new AddAssetCategory();
+		clearAssetCategories = new ClearAssetCategories();
+		removeAssetCategory = new RemoveAssetCategory();
+		
+		containsAssetTag = new ContainsAssetTag();
+		
+		addAssetTag = new AddAssetTag();
+		clearAssetTags = new ClearAssetTags();
+		removeAssetTag = new RemoveAssetTag();
 	}
-
+	
 	public void destroy() {
 		EntityCacheUtil.removeCache(AssetEntryImpl.class.getName());
 		FinderCacheUtil.removeCache(FINDER_CLASS_NAME_ENTITY);
-		FinderCacheUtil.removeCache(FINDER_CLASS_NAME_LIST_WITH_PAGINATION);
 		FinderCacheUtil.removeCache(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
-
-		TableMapperFactory.removeTableMapper("AssetEntries_AssetCategories");
-		TableMapperFactory.removeTableMapper("AssetEntries_AssetTags");
+		
+		PartitionFinderCacheUtil.removeAllCaches(FINDER_CLASS_NAME_ENTITY);
+		PartitionFinderCacheUtil.removeAllCaches(FINDER_CLASS_NAME_LIST_WITHOUT_PAGINATION);
 	}
-
-	@BeanReference(type = CompanyProviderWrapper.class)
-	protected CompanyProvider companyProvider;
+	
 	@BeanReference(type = AssetCategoryPersistence.class)
 	protected AssetCategoryPersistence assetCategoryPersistence;
-	protected TableMapper<AssetEntry, com.liferay.asset.kernel.model.AssetCategory> assetEntryToAssetCategoryTableMapper;
+	@BeanReference(type = AssetCategoryPropertyPersistence.class)
+	protected AssetCategoryPropertyPersistence assetCategoryPropertyPersistence;
+	@BeanReference(type = AssetEntryPersistence.class)
+	protected AssetEntryPersistence assetEntryPersistence;
+	@BeanReference(type = AssetLinkPersistence.class)
+	protected AssetLinkPersistence assetLinkPersistence;
 	@BeanReference(type = AssetTagPersistence.class)
 	protected AssetTagPersistence assetTagPersistence;
-	protected TableMapper<AssetEntry, com.liferay.asset.kernel.model.AssetTag> assetEntryToAssetTagTableMapper;
-
-	private Long _getTime(Date date) {
-		if (date == null) {
-			return null;
+	@BeanReference(type = AssetTagPropertyPersistence.class)
+	protected AssetTagPropertyPersistence assetTagPropertyPersistence;
+	@BeanReference(type = AssetTagStatsPersistence.class)
+	protected AssetTagStatsPersistence assetTagStatsPersistence;
+	@BeanReference(type = AssetVocabularyPersistence.class)
+	protected AssetVocabularyPersistence assetVocabularyPersistence;
+	@BeanReference(type = CompanyPersistence.class)
+	protected CompanyPersistence companyPersistence;
+	@BeanReference(type = GroupPersistence.class)
+	protected GroupPersistence groupPersistence;
+	@BeanReference(type = ResourcePersistence.class)
+	protected ResourcePersistence resourcePersistence;
+	@BeanReference(type = UserPersistence.class)
+	protected UserPersistence userPersistence;
+	@BeanReference(type = BlogsEntryPersistence.class)
+	protected BlogsEntryPersistence blogsEntryPersistence;
+	@BeanReference(type = BookmarksEntryPersistence.class)
+	protected BookmarksEntryPersistence bookmarksEntryPersistence;
+	@BeanReference(type = DLFileEntryPersistence.class)
+	protected DLFileEntryPersistence dlFileEntryPersistence;
+	@BeanReference(type = DLFolderPersistence.class)
+	protected DLFolderPersistence dlFolderPersistence;
+	@BeanReference(type = JournalArticlePersistence.class)
+	protected JournalArticlePersistence journalArticlePersistence;
+	@BeanReference(type = JournalArticleResourcePersistence.class)
+	protected JournalArticleResourcePersistence journalArticleResourcePersistence;
+	@BeanReference(type = MBMessagePersistence.class)
+	protected MBMessagePersistence mbMessagePersistence;
+	@BeanReference(type = SocialActivityPersistence.class)
+	protected SocialActivityPersistence socialActivityPersistence;
+	@BeanReference(type = WikiPagePersistence.class)
+	protected WikiPagePersistence wikiPagePersistence;
+	@BeanReference(type = WikiPageResourcePersistence.class)
+	protected WikiPageResourcePersistence wikiPageResourcePersistence;
+	protected ContainsAssetCategory containsAssetCategory;
+	protected AddAssetCategory addAssetCategory;
+	protected ClearAssetCategories clearAssetCategories;
+	protected RemoveAssetCategory removeAssetCategory;
+	protected ContainsAssetTag containsAssetTag;
+	protected AddAssetTag addAssetTag;
+	protected ClearAssetTags clearAssetTags;
+	protected RemoveAssetTag removeAssetTag;
+	
+	protected class ContainsAssetCategory {
+		protected ContainsAssetCategory() {
+			_mappingSqlQuery = MappingSqlQueryFactoryUtil.getMappingSqlQuery(getDataSource(),
+					_SQL_CONTAINSASSETCATEGORY,
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT },
+					RowMapper.COUNT);
 		}
-
-		return date.getTime();
+		
+		protected boolean contains(long entryId, long categoryId) {
+			List<Integer> results = _mappingSqlQuery.execute(new Object[] {
+					new Long(entryId), new Long(categoryId)
+			});
+			
+			if (results.size() > 0) {
+				Integer count = results.get(0);
+				
+				if (count.intValue() > 0) {
+					return true;
+				}
+			}
+			
+			return false;
+		}
+		
+		private MappingSqlQuery<Integer> _mappingSqlQuery;
 	}
-
+	
+	protected class AddAssetCategory {
+		protected AddAssetCategory() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"INSERT INTO AssetEntries_AssetCategories (entryId, categoryId) VALUES (?, ?)",
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT });
+		}
+		
+		protected void add(long entryId, long categoryId)
+				throws SystemException {
+			if (!containsAssetCategory.contains(entryId, categoryId)) {
+				ModelListener<com.liferay.portlet.asset.model.AssetCategory>[] assetCategoryListeners =
+						assetCategoryPersistence.getListeners();
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onBeforeAddAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+							categoryId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+					listener.onBeforeAddAssociation(categoryId,
+							AssetEntry.class.getName(), entryId);
+				}
+				
+				_sqlUpdate.update(new Object[] {
+						new Long(entryId), new Long(categoryId)
+				});
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onAfterAddAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+							categoryId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+					listener.onAfterAddAssociation(categoryId,
+							AssetEntry.class.getName(), entryId);
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
+	protected class ClearAssetCategories {
+		protected ClearAssetCategories() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"DELETE FROM AssetEntries_AssetCategories WHERE entryId = ?",
+					new int[] { java.sql.Types.BIGINT });
+		}
+		
+		protected void clear(long entryId) throws SystemException {
+			ModelListener<com.liferay.portlet.asset.model.AssetCategory>[] assetCategoryListeners =
+					assetCategoryPersistence.getListeners();
+			
+			List<com.liferay.portlet.asset.model.AssetCategory> assetCategories = null;
+			
+			if ((listeners.length > 0) || (assetCategoryListeners.length > 0)) {
+				assetCategories = getAssetCategories(entryId);
+				
+				for (com.liferay.portlet.asset.model.AssetCategory assetCategory : assetCategories) {
+					for (ModelListener<AssetEntry> listener : listeners) {
+						listener.onBeforeRemoveAssociation(entryId,
+								com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+								assetCategory.getPrimaryKey());
+					}
+					
+					for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+						listener.onBeforeRemoveAssociation(assetCategory.getPrimaryKey(),
+								AssetEntry.class.getName(), entryId);
+					}
+				}
+			}
+			
+			_sqlUpdate.update(new Object[] { new Long(entryId) });
+			
+			if ((listeners.length > 0) || (assetCategoryListeners.length > 0)) {
+				for (com.liferay.portlet.asset.model.AssetCategory assetCategory : assetCategories) {
+					for (ModelListener<AssetEntry> listener : listeners) {
+						listener.onAfterRemoveAssociation(entryId,
+								com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+								assetCategory.getPrimaryKey());
+					}
+					
+					for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+						listener.onAfterRemoveAssociation(assetCategory.getPrimaryKey(),
+								AssetEntry.class.getName(), entryId);
+					}
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
+	protected class RemoveAssetCategory {
+		protected RemoveAssetCategory() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"DELETE FROM AssetEntries_AssetCategories WHERE entryId = ? AND categoryId = ?",
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT });
+		}
+		
+		protected void remove(long entryId, long categoryId)
+				throws SystemException {
+			if (containsAssetCategory.contains(entryId, categoryId)) {
+				ModelListener<com.liferay.portlet.asset.model.AssetCategory>[] assetCategoryListeners =
+						assetCategoryPersistence.getListeners();
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onBeforeRemoveAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+							categoryId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+					listener.onBeforeRemoveAssociation(categoryId,
+							AssetEntry.class.getName(), entryId);
+				}
+				
+				_sqlUpdate.update(new Object[] {
+						new Long(entryId), new Long(categoryId)
+				});
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onAfterRemoveAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetCategory.class.getName(),
+							categoryId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetCategory> listener : assetCategoryListeners) {
+					listener.onAfterRemoveAssociation(categoryId,
+							AssetEntry.class.getName(), entryId);
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
+	protected class ContainsAssetTag {
+		protected ContainsAssetTag() {
+			_mappingSqlQuery = MappingSqlQueryFactoryUtil.getMappingSqlQuery(getDataSource(),
+					_SQL_CONTAINSASSETTAG,
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT },
+					RowMapper.COUNT);
+		}
+		
+		protected boolean contains(long entryId, long tagId) {
+			List<Integer> results = _mappingSqlQuery.execute(new Object[] {
+					new Long(entryId), new Long(tagId)
+			});
+			
+			if (results.size() > 0) {
+				Integer count = results.get(0);
+				
+				if (count.intValue() > 0) {
+					return true;
+				}
+			}
+			
+			return false;
+		}
+		
+		private MappingSqlQuery<Integer> _mappingSqlQuery;
+	}
+	
+	protected class AddAssetTag {
+		protected AddAssetTag() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"INSERT INTO AssetEntries_AssetTags (entryId, tagId) VALUES (?, ?)",
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT });
+		}
+		
+		protected void add(long entryId, long tagId) throws SystemException {
+			if (!containsAssetTag.contains(entryId, tagId)) {
+				ModelListener<com.liferay.portlet.asset.model.AssetTag>[] assetTagListeners =
+						assetTagPersistence.getListeners();
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onBeforeAddAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetTag.class.getName(),
+							tagId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+					listener.onBeforeAddAssociation(tagId,
+							AssetEntry.class.getName(), entryId);
+				}
+				
+				_sqlUpdate.update(new Object[] {
+						new Long(entryId), new Long(tagId)
+				});
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onAfterAddAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetTag.class.getName(),
+							tagId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+					listener.onAfterAddAssociation(tagId,
+							AssetEntry.class.getName(), entryId);
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
+	protected class ClearAssetTags {
+		protected ClearAssetTags() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"DELETE FROM AssetEntries_AssetTags WHERE entryId = ?",
+					new int[] { java.sql.Types.BIGINT });
+		}
+		
+		protected void clear(long entryId) throws SystemException {
+			ModelListener<com.liferay.portlet.asset.model.AssetTag>[] assetTagListeners =
+					assetTagPersistence.getListeners();
+			
+			List<com.liferay.portlet.asset.model.AssetTag> assetTags = null;
+			
+			if ((listeners.length > 0) || (assetTagListeners.length > 0)) {
+				assetTags = getAssetTags(entryId);
+				
+				for (com.liferay.portlet.asset.model.AssetTag assetTag : assetTags) {
+					for (ModelListener<AssetEntry> listener : listeners) {
+						listener.onBeforeRemoveAssociation(entryId,
+								com.liferay.portlet.asset.model.AssetTag.class.getName(),
+								assetTag.getPrimaryKey());
+					}
+					
+					for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+						listener.onBeforeRemoveAssociation(assetTag.getPrimaryKey(),
+								AssetEntry.class.getName(), entryId);
+					}
+				}
+			}
+			
+			_sqlUpdate.update(new Object[] { new Long(entryId) });
+			
+			if ((listeners.length > 0) || (assetTagListeners.length > 0)) {
+				for (com.liferay.portlet.asset.model.AssetTag assetTag : assetTags) {
+					for (ModelListener<AssetEntry> listener : listeners) {
+						listener.onAfterRemoveAssociation(entryId,
+								com.liferay.portlet.asset.model.AssetTag.class.getName(),
+								assetTag.getPrimaryKey());
+					}
+					
+					for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+						listener.onAfterRemoveAssociation(assetTag.getPrimaryKey(),
+								AssetEntry.class.getName(), entryId);
+					}
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
+	protected class RemoveAssetTag {
+		protected RemoveAssetTag() {
+			_sqlUpdate = SqlUpdateFactoryUtil.getSqlUpdate(getDataSource(),
+					"DELETE FROM AssetEntries_AssetTags WHERE entryId = ? AND tagId = ?",
+					new int[] { java.sql.Types.BIGINT, java.sql.Types.BIGINT });
+		}
+		
+		protected void remove(long entryId, long tagId)
+				throws SystemException {
+			if (containsAssetTag.contains(entryId, tagId)) {
+				ModelListener<com.liferay.portlet.asset.model.AssetTag>[] assetTagListeners =
+						assetTagPersistence.getListeners();
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onBeforeRemoveAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetTag.class.getName(),
+							tagId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+					listener.onBeforeRemoveAssociation(tagId,
+							AssetEntry.class.getName(), entryId);
+				}
+				
+				_sqlUpdate.update(new Object[] {
+						new Long(entryId), new Long(tagId)
+				});
+				
+				for (ModelListener<AssetEntry> listener : listeners) {
+					listener.onAfterRemoveAssociation(entryId,
+							com.liferay.portlet.asset.model.AssetTag.class.getName(),
+							tagId);
+				}
+				
+				for (ModelListener<com.liferay.portlet.asset.model.AssetTag> listener : assetTagListeners) {
+					listener.onAfterRemoveAssociation(tagId,
+							AssetEntry.class.getName(), entryId);
+				}
+			}
+		}
+		
+		private SqlUpdate _sqlUpdate;
+	}
+	
 	private static final String _SQL_SELECT_ASSETENTRY = "SELECT assetEntry FROM AssetEntry assetEntry";
 	private static final String _SQL_SELECT_ASSETENTRY_WHERE = "SELECT assetEntry FROM AssetEntry assetEntry WHERE ";
 	private static final String _SQL_COUNT_ASSETENTRY = "SELECT COUNT(assetEntry) FROM AssetEntry assetEntry";
 	private static final String _SQL_COUNT_ASSETENTRY_WHERE = "SELECT COUNT(assetEntry) FROM AssetEntry assetEntry WHERE ";
+	private static final String _SQL_GETASSETCATEGORIES = "SELECT {AssetCategory.*} FROM AssetCategory INNER JOIN AssetEntries_AssetCategories ON (AssetEntries_AssetCategories.categoryId = AssetCategory.categoryId) WHERE (AssetEntries_AssetCategories.entryId = ?)";
+	private static final String _SQL_GETASSETCATEGORIESSIZE = "SELECT COUNT(*) AS COUNT_VALUE FROM AssetEntries_AssetCategories WHERE entryId = ?";
+	private static final String _SQL_CONTAINSASSETCATEGORY = "SELECT COUNT(*) AS COUNT_VALUE FROM AssetEntries_AssetCategories WHERE entryId = ? AND categoryId = ?";
+	private static final String _SQL_GETASSETTAGS = "SELECT {AssetTag.*} FROM AssetTag INNER JOIN AssetEntries_AssetTags ON (AssetEntries_AssetTags.tagId = AssetTag.tagId) WHERE (AssetEntries_AssetTags.entryId = ?)";
+	private static final String _SQL_GETASSETTAGSSIZE = "SELECT COUNT(*) AS COUNT_VALUE FROM AssetEntries_AssetTags WHERE entryId = ?";
+	private static final String _SQL_CONTAINSASSETTAG = "SELECT COUNT(*) AS COUNT_VALUE FROM AssetEntries_AssetTags WHERE entryId = ? AND tagId = ?";
+	private static final String _FINDER_COLUMN_COMPANYID_COMPANYID_2 = "assetEntry.companyId = ?";
+	private static final String _FINDER_COLUMN_VISIBLE_VISIBLE_2 = "assetEntry.visible = ?";
+	private static final String _FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_1 = "assetEntry.publishDate IS NULL";
+	private static final String _FINDER_COLUMN_PUBLISHDATE_PUBLISHDATE_2 = "assetEntry.publishDate = ?";
+	private static final String _FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_1 = "assetEntry.expirationDate IS NULL";
+	private static final String _FINDER_COLUMN_EXPIRATIONDATE_EXPIRATIONDATE_2 = "assetEntry.expirationDate = ?";
+	private static final String _FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_1 = "assetEntry.layoutUuid IS NULL";
+	private static final String _FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_2 = "assetEntry.layoutUuid = ?";
+	private static final String _FINDER_COLUMN_LAYOUTUUID_LAYOUTUUID_3 = "(assetEntry.layoutUuid IS NULL OR assetEntry.layoutUuid = ?)";
+	private static final String _FINDER_COLUMN_G_CU_GROUPID_2 = "assetEntry.groupId = ? AND ";
+	private static final String _FINDER_COLUMN_G_CU_CLASSUUID_1 = "assetEntry.classUuid IS NULL";
+	private static final String _FINDER_COLUMN_G_CU_CLASSUUID_2 = "assetEntry.classUuid = ?";
+	private static final String _FINDER_COLUMN_G_CU_CLASSUUID_3 = "(assetEntry.classUuid IS NULL OR assetEntry.classUuid = ?)";
+	private static final String _FINDER_COLUMN_C_C_CLASSNAMEID_2 = "assetEntry.classNameId = ? AND ";
+	private static final String _FINDER_COLUMN_C_C_CLASSPK_2 = "assetEntry.classPK = ?";
 	private static final String _ORDER_BY_ENTITY_ALIAS = "assetEntry.";
 	private static final String _NO_SUCH_ENTITY_WITH_PRIMARY_KEY = "No AssetEntry exists with the primary key ";
 	private static final String _NO_SUCH_ENTITY_WITH_KEY = "No AssetEntry exists with the key {";
-	private static final Log _log = LogFactoryUtil.getLog(AssetEntryPersistenceImpl.class);
+	private static final boolean _HIBERNATE_CACHE_USE_SECOND_LEVEL_CACHE = com.liferay.portal.util.PropsValues.HIBERNATE_CACHE_USE_SECOND_LEVEL_CACHE;
+	private static Log _log = LogFactoryUtil.getLog(AssetEntryPersistenceImpl.class);
+	private static AssetEntry _nullAssetEntry = new AssetEntryImpl() {
+		@Override
+		public Object clone() {
+			return this;
+		}
+		
+		@Override
+		public CacheModel<AssetEntry> toCacheModel() {
+			return _nullAssetEntryCacheModel;
+		}
+	};
+	
+	private static CacheModel<AssetEntry> _nullAssetEntryCacheModel = new CacheModel<AssetEntry>() {
+		public AssetEntry toEntityModel() {
+			return _nullAssetEntry;
+		}
+	};
 }

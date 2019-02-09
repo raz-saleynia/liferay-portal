@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,510 +14,316 @@
 
 package com.liferay.portal.servlet;
 
-import com.liferay.petra.string.CharPool;
-import com.liferay.petra.string.StringPool;
-import com.liferay.portal.kernel.cache.PortalCache;
-import com.liferay.portal.kernel.cache.PortalCacheHelperUtil;
-import com.liferay.portal.kernel.cache.PortalCacheManagerNames;
-import com.liferay.portal.kernel.exception.NoSuchLayoutException;
-import com.liferay.portal.kernel.language.LanguageUtil;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.model.Portlet;
-import com.liferay.portal.kernel.model.PortletApp;
-import com.liferay.portal.kernel.service.PortletLocalServiceUtil;
 import com.liferay.portal.kernel.servlet.HttpHeaders;
-import com.liferay.portal.kernel.servlet.RequestDispatcherUtil;
+import com.liferay.portal.kernel.servlet.ServletContextUtil;
 import com.liferay.portal.kernel.servlet.ServletResponseUtil;
-import com.liferay.portal.kernel.util.ContentTypes;
-import com.liferay.portal.kernel.util.FileUtil;
-import com.liferay.portal.kernel.util.HttpUtil;
-import com.liferay.portal.kernel.util.ObjectValuePair;
-import com.liferay.portal.kernel.util.ParamUtil;
-import com.liferay.portal.kernel.util.PortalUtil;
-import com.liferay.portal.kernel.util.PortletKeys;
-import com.liferay.portal.kernel.util.PropsKeys;
-import com.liferay.portal.kernel.util.SetUtil;
-import com.liferay.portal.kernel.util.StringBundler;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Time;
-import com.liferay.portal.kernel.util.Validator;
-import com.liferay.portal.minifier.MinifierUtil;
+import com.liferay.portal.kernel.util.*;
 import com.liferay.portal.servlet.filters.dynamiccss.DynamicCSSUtil;
-import com.liferay.portal.util.AggregateUtil;
+import com.liferay.portal.util.MinifierUtil;
+import com.liferay.portal.util.PortalUtil;
 import com.liferay.portal.util.PrefsPropsUtil;
 import com.liferay.portal.util.PropsValues;
 
-import java.io.IOException;
-import java.io.Serializable;
-
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
-
-import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * @author Eduardo Lundgren
  * @author Edward Han
  * @author Zsigmond Rab
- * @author Raymond Augé
  */
 public class ComboServlet extends HttpServlet {
 
-	public static void clearCache() {
-		_bytesArrayPortalCache.removeAll();
-		_fileContentBagPortalCache.removeAll();
-	}
+    @Override
+    public void service(
+            HttpServletRequest request, HttpServletResponse response)
+            throws IOException, ServletException {
 
-	@Override
-	public void service(
-			HttpServletRequest request, HttpServletResponse response)
-		throws IOException, ServletException {
+        try {
+            doService(request, response);
+        }
+        catch (Exception e) {
+            _log.error(e, e);
 
-		try {
-			doService(request, response);
-		}
-		catch (Exception e) {
-			_log.error(e, e);
+            PortalUtil.sendError(
+                    HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e, request,
+                    response);
+        }
+    }
 
-			PortalUtil.sendError(
-				HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e, request,
-				response);
-		}
-	}
+    protected void doService(
+            HttpServletRequest request, HttpServletResponse response)
+            throws Exception {
 
-	protected static String getModulePortletId(String modulePath) {
-		int index = modulePath.indexOf(CharPool.COLON);
+        String contextPath = PortalUtil.getPathContext();
 
-		if (index > 0) {
-			return modulePath.substring(0, index);
-		}
+        String[] modulePaths = request.getParameterValues("m");
 
-		return PortletKeys.PORTAL;
-	}
+        if ((modulePaths == null) || (modulePaths.length == 0)) {
+            // LAKPLAT-2070: Ext override to return 404
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
 
-	protected static String getResourcePath(String modulePath) {
-		int index = modulePath.indexOf(CharPool.COLON);
+            return;
+        }
 
-		if (index > 0) {
-			return HttpUtil.removePathParameters(
-				modulePath.substring(index + 1));
-		}
+        Arrays.sort(modulePaths);
 
-		return HttpUtil.removePathParameters(modulePath);
-	}
+        String modulePathsString = null;
 
-	protected void doService(
-			HttpServletRequest request, HttpServletResponse response)
-		throws Exception {
+        byte[][] bytesArray = null;
 
-		Set<String> modulePathsSet = new LinkedHashSet<>();
+        if (!PropsValues.COMBO_CHECK_TIMESTAMP) {
+            modulePathsString = Arrays.toString(modulePaths);
 
-		Map<String, String[]> parameterMap = HttpUtil.getParameterMap(
-			request.getQueryString());
+            bytesArray = _byteArrays.get(modulePathsString);
+        }
 
-		Enumeration<String> enu = Collections.enumeration(
-			parameterMap.keySet());
+        String firstModulePath = modulePaths[0];
 
-		while (enu.hasMoreElements()) {
-			String name = enu.nextElement();
+        String extension = FileUtil.getExtension(firstModulePath);
 
-			if (_protectedParameters.contains(name)) {
-				continue;
-			}
+        if (bytesArray == null) {
+            String p = ParamUtil.getString(request, "p");
 
-			name = HttpUtil.decodePath(name);
+            String minifierType = ParamUtil.getString(request, "minifierType");
 
-			ServletContext servletContext = getServletContext();
+            if (Validator.isNull(minifierType)) {
+                minifierType = "js";
 
-			String contextPath = servletContext.getContextPath();
+                if (extension.equalsIgnoreCase(_CSS_EXTENSION)) {
+                    minifierType = "css";
+                }
+            }
 
-			if (name.startsWith(contextPath)) {
-				name = name.replaceFirst(contextPath, StringPool.BLANK);
-			}
+            int length = modulePaths.length;
 
-			String pathProxy = PortalUtil.getPathProxy();
+            bytesArray = new byte[length][];
 
-			if (name.startsWith(pathProxy)) {
-				name = name.replaceFirst(pathProxy, StringPool.BLANK);
-			}
+            for (String modulePath : modulePaths) {
+                if (!validateModuleExtension(modulePath)) {
+                    PortalUtil.sendError(
+                            HttpServletResponse.SC_NOT_FOUND, new IOException(),
+                            request, response);
 
-			modulePathsSet.add(name);
-		}
+                    return;
+                }
 
-		if (modulePathsSet.isEmpty()) {
-			PortalUtil.sendError(
-				HttpServletResponse.SC_NOT_FOUND,
-				new NoSuchLayoutException(
-					"Query string translates to an empty module paths set"),
-				request, response);
+                byte[] bytes = new byte[0];
 
-			return;
-		}
+                if (Validator.isNotNull(modulePath)) {
+                    modulePath = StringUtil.replaceFirst(
+                            p.concat(modulePath), contextPath, StringPool.BLANK);
 
-		String[] modulePaths = modulePathsSet.toArray(
-			new String[modulePathsSet.size()]);
+                    bytes = getFileContent(
+                            request, response, modulePath, minifierType);
+                }
 
-		String extension = StringPool.BLANK;
+                bytesArray[--length] = bytes;
+            }
 
-		for (String modulePath : modulePaths) {
-			String pathExtension = _getModulePathExtension(modulePath);
+            if (modulePathsString != null) {
+                _byteArrays.put(modulePathsString, bytesArray);
+            }
+        }
 
-			if (Validator.isNull(pathExtension)) {
-				continue;
-			}
+        String contentType = ContentTypes.TEXT_JAVASCRIPT;
 
-			if (Validator.isNull(extension)) {
-				extension = pathExtension;
-			}
+        if (extension.equalsIgnoreCase(_CSS_EXTENSION)) {
+            contentType = ContentTypes.TEXT_CSS;
+        }
 
-			if (!extension.equals(pathExtension)) {
-				response.setHeader(
-					HttpHeaders.CACHE_CONTROL,
-					HttpHeaders.CACHE_CONTROL_NO_CACHE_VALUE);
-				response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        response.setContentType(contentType);
 
-				return;
-			}
-		}
+        ServletResponseUtil.write(response, bytesArray);
+    }
 
-		String minifierType = ParamUtil.getString(request, "minifierType");
+    protected File getFile(String path) throws IOException {
+        ServletContext servletContext = getServletContext();
 
-		if (Validator.isNull(minifierType)) {
-			minifierType = "js";
+        String basePath = ServletContextUtil.getRealPath(
+                servletContext, _JAVASCRIPT_DIR);
 
-			if (StringUtil.equalsIgnoreCase(extension, _CSS_EXTENSION)) {
-				minifierType = "css";
-			}
-		}
+        if (basePath == null) {
+            return null;
+        }
 
-		if (!minifierType.equals("css") && !minifierType.equals("js")) {
-			minifierType = "js";
-		}
+        basePath = StringUtil.replace(
+                basePath, CharPool.BACK_SLASH, CharPool.SLASH);
 
-		String modulePathsString = null;
+        File baseDir = new File(basePath);
 
-		byte[][] bytesArray = null;
+        if (!baseDir.exists()) {
+            return null;
+        }
 
-		if (!PropsValues.COMBO_CHECK_TIMESTAMP) {
-			modulePathsString = Arrays.toString(modulePaths);
+        String filePath = ServletContextUtil.getRealPath(servletContext, path);
 
-			modulePathsString +=
-				StringPool.POUND + LanguageUtil.getLanguageId(request);
+        if (filePath == null) {
+            return null;
+        }
 
-			bytesArray = _bytesArrayPortalCache.get(modulePathsString);
-		}
+        filePath = StringUtil.replace(
+                filePath, CharPool.BACK_SLASH, CharPool.SLASH);
 
-		if (bytesArray == null) {
-			bytesArray = new byte[modulePaths.length][];
+        File file = new File(filePath);
 
-			for (int i = 0; i < modulePaths.length; i++) {
-				String modulePath = modulePaths[i];
+        if (!file.exists()) {
+            return null;
+        }
 
-				if (!validateModuleExtension(modulePath)) {
-					response.setHeader(
-						HttpHeaders.CACHE_CONTROL,
-						HttpHeaders.CACHE_CONTROL_NO_CACHE_VALUE);
-					response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        String baseCanonicalPath = baseDir.getCanonicalPath();
+        String fileCanonicalPath = file.getCanonicalPath();
 
-					return;
-				}
+        if (fileCanonicalPath.indexOf(baseCanonicalPath) == 0) {
+            return file;
+        }
 
-				byte[] bytes = new byte[0];
+        return null;
+    }
 
-				if (Validator.isNotNull(modulePath)) {
-					RequestDispatcher requestDispatcher =
-						getResourceRequestDispatcher(
-							request, response, modulePath);
+    protected byte[] getFileContent(
+            HttpServletRequest request, HttpServletResponse response,
+            String path, String minifierType)
+            throws IOException {
 
-					if (requestDispatcher == null) {
-						response.setHeader(
-							HttpHeaders.CACHE_CONTROL,
-							HttpHeaders.CACHE_CONTROL_NO_CACHE_VALUE);
-						response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        String fileContentKey = path.concat(StringPool.QUESTION).concat(
+                minifierType);
 
-						return;
-					}
+        FileContentBag fileContentBag = _fileContentBags.get(fileContentKey);
 
-					bytes = getResourceContent(
-						requestDispatcher, request, response, modulePath,
-						minifierType);
-				}
+        if ((fileContentBag != null) && !PropsValues.COMBO_CHECK_TIMESTAMP) {
+            return fileContentBag._fileContent;
+        }
 
-				bytesArray[i] = bytes;
-			}
+        File file = getFile(path);
 
-			if ((modulePathsString != null) &&
-				!PropsValues.COMBO_CHECK_TIMESTAMP) {
+        if ((fileContentBag != null) && PropsValues.COMBO_CHECK_TIMESTAMP) {
+            long elapsedTime =
+                    System.currentTimeMillis() - fileContentBag._lastModified;
 
-				_bytesArrayPortalCache.put(modulePathsString, bytesArray);
-			}
-		}
+            if ((file != null) &&
+                    (elapsedTime <= PropsValues.COMBO_CHECK_TIMESTAMP_INTERVAL) &&
+                    (file.lastModified() == fileContentBag._lastModified)) {
 
-		String contentType = ContentTypes.TEXT_JAVASCRIPT;
+                return fileContentBag._fileContent;
+            }
+            else {
+                _fileContentBags.remove(fileContentKey, fileContentBag);
+            }
+        }
 
-		if (StringUtil.equalsIgnoreCase(extension, _CSS_EXTENSION)) {
-			contentType = ContentTypes.TEXT_CSS;
-		}
+        if (file == null) {
+            fileContentBag = _EMPTY_FILE_CONTENT_BAG;
+        }
+        else {
+            String stringFileContent = FileUtil.read(file);
 
-		response.setContentType(contentType);
+            if (!StringUtil.endsWith(path, _CSS_MINIFIED_SUFFIX) &&
+                    !StringUtil.endsWith(path, _JAVASCRIPT_MINIFIED_SUFFIX)) {
 
-		ServletResponseUtil.write(response, bytesArray);
-	}
+                if (minifierType.equals("css")) {
+                    String cssRealPath = file.getAbsolutePath();
 
-	protected byte[] getResourceContent(
-			RequestDispatcher requestDispatcher, HttpServletRequest request,
-			HttpServletResponse response, String modulePath,
-			String minifierType)
-		throws Exception {
+                    try {
+                        stringFileContent = DynamicCSSUtil.parseSass(
+                                request, cssRealPath, stringFileContent);
+                    }
+                    catch (Exception e) {
+                        _log.error(
+                                "Unable to parse SASS on CSS " + cssRealPath, e);
 
-		String resourcePath = getResourcePath(modulePath);
+                        if (_log.isDebugEnabled()) {
+                            _log.debug(stringFileContent);
+                        }
 
-		String portletId = getModulePortletId(modulePath);
+                        response.setHeader(
+                                HttpHeaders.CACHE_CONTROL,
+                                HttpHeaders.CACHE_CONTROL_NO_CACHE_VALUE);
+                    }
 
-		Portlet portlet = PortletLocalServiceUtil.getPortletById(portletId);
+                    stringFileContent = MinifierUtil.minifyCss(
+                            stringFileContent);
+                }
+                else if (minifierType.equals("js")) {
+                    stringFileContent = MinifierUtil.minifyJavaScript(
+                            stringFileContent);
+                }
+            }
 
-		if (!resourcePath.startsWith(portlet.getContextPath())) {
-			resourcePath = portlet.getContextPath() + resourcePath;
-		}
+            fileContentBag = new FileContentBag(
+                    stringFileContent.getBytes(StringPool.UTF8),
+                    file.lastModified());
+        }
 
-		StringBundler sb = new StringBundler(5);
+        FileContentBag oldFileContentBag = _fileContentBags.putIfAbsent(
+                fileContentKey, fileContentBag);
 
-		sb.append(resourcePath);
-		sb.append(StringPool.QUESTION);
-		sb.append(minifierType);
-		sb.append("&languageId=");
-		sb.append(ParamUtil.getString(request, "languageId"));
+        if (oldFileContentBag != null) {
+            fileContentBag = oldFileContentBag;
+        }
 
-		String fileContentKey = sb.toString();
+        return fileContentBag._fileContent;
+    }
 
-		FileContentBag fileContentBag = _fileContentBagPortalCache.get(
-			fileContentKey);
+    protected boolean validateModuleExtension(String moduleName)
+            throws Exception {
 
-		if ((fileContentBag != null) && !PropsValues.COMBO_CHECK_TIMESTAMP) {
-			return fileContentBag._fileContent;
-		}
+        boolean validModuleExtension = false;
 
-		if ((fileContentBag != null) && PropsValues.COMBO_CHECK_TIMESTAMP) {
-			long elapsedTime =
-				System.currentTimeMillis() - fileContentBag._lastModified;
+        String[] fileExtensions = PrefsPropsUtil.getStringArray(
+                PropsKeys.COMBO_ALLOWED_FILE_EXTENSIONS, StringPool.COMMA);
 
-			if ((requestDispatcher != null) &&
-				(elapsedTime <= PropsValues.COMBO_CHECK_TIMESTAMP_INTERVAL) &&
-				(RequestDispatcherUtil.getLastModifiedTime(
-					requestDispatcher, request, response) ==
-						fileContentBag._lastModified)) {
+        for (int i = 0; i < fileExtensions.length; i++) {
+            if (StringPool.STAR.equals(fileExtensions[i]) ||
+                    StringUtil.endsWith(moduleName, fileExtensions[i])) {
 
-				return fileContentBag._fileContent;
-			}
+                validModuleExtension = true;
 
-			_fileContentBagPortalCache.remove(fileContentKey);
-		}
+                break;
+            }
+        }
 
-		if (requestDispatcher == null) {
-			fileContentBag = _EMPTY_FILE_CONTENT_BAG;
-		}
-		else {
-			ObjectValuePair<String, Long> objectValuePair =
-				RequestDispatcherUtil.getContentAndLastModifiedTime(
-					requestDispatcher, request, response);
+        return validModuleExtension;
+    }
 
-			String stringFileContent = objectValuePair.getKey();
+    private static final String _CSS_EXTENSION = "css";
 
-			if (!StringUtil.endsWith(resourcePath, _CSS_MINIFIED_DASH_SUFFIX) &&
-				!StringUtil.endsWith(resourcePath, _CSS_MINIFIED_DOT_SUFFIX) &&
-				!StringUtil.endsWith(
-					resourcePath, _JAVASCRIPT_MINIFIED_DASH_SUFFIX) &&
-				!StringUtil.endsWith(
-					resourcePath, _JAVASCRIPT_MINIFIED_DOT_SUFFIX)) {
+    private static final String _CSS_MINIFIED_SUFFIX = "-min.css";
 
-				if (minifierType.equals("css")) {
-					try {
-						stringFileContent = DynamicCSSUtil.replaceToken(
-							getServletContext(), request, stringFileContent);
-					}
-					catch (Exception e) {
-						_log.error(
-							"Unable to replace tokens in CSS " + resourcePath,
-							e);
+    private static final FileContentBag _EMPTY_FILE_CONTENT_BAG =
+            new FileContentBag(new byte[0], 0);
 
-						if (_log.isDebugEnabled()) {
-							_log.debug(stringFileContent);
-						}
+    private static final String _JAVASCRIPT_DIR = "html/js";
 
-						response.setHeader(
-							HttpHeaders.CACHE_CONTROL,
-							HttpHeaders.CACHE_CONTROL_NO_CACHE_VALUE);
-					}
+    private static final String _JAVASCRIPT_MINIFIED_SUFFIX = "-min.js";
 
-					String baseURL = StringPool.BLANK;
+    private static Log _log = LogFactoryUtil.getLog(ComboServlet.class);
 
-					int slashIndex = resourcePath.lastIndexOf(CharPool.SLASH);
+    private ConcurrentMap<String, byte[][]> _byteArrays =
+            new ConcurrentHashMap<String, byte[][]>();
+    private ConcurrentMap<String, FileContentBag> _fileContentBags =
+            new ConcurrentHashMap<String, FileContentBag>();
 
-					if (slashIndex != -1) {
-						baseURL = resourcePath.substring(0, slashIndex + 1);
-					}
+    private static class FileContentBag {
 
-					stringFileContent = AggregateUtil.updateRelativeURLs(
-						stringFileContent, baseURL);
+        public FileContentBag(byte[] fileContent, long lastModifiedTime) {
+            _fileContent = fileContent;
+            _lastModified = lastModifiedTime;
+        }
 
-					stringFileContent = MinifierUtil.minifyCss(
-						stringFileContent);
-				}
-				else if (minifierType.equals("js")) {
-					stringFileContent = MinifierUtil.minifyJavaScript(
-						resourcePath, stringFileContent);
+        private byte[] _fileContent;
+        private long _lastModified;
 
-					stringFileContent = stringFileContent.concat(
-						StringPool.NEW_LINE);
-				}
-			}
-			else if (StringUtil.endsWith(
-						resourcePath, _JAVASCRIPT_MINIFIED_DASH_SUFFIX) ||
-					 StringUtil.endsWith(
-						 resourcePath, _JAVASCRIPT_MINIFIED_DOT_SUFFIX)) {
-
-				stringFileContent = stringFileContent.concat(
-					StringPool.NEW_LINE);
-			}
-
-			fileContentBag = new FileContentBag(
-				stringFileContent.getBytes(StringPool.UTF8),
-				objectValuePair.getValue());
-		}
-
-		if (PropsValues.COMBO_CHECK_TIMESTAMP) {
-			int timeToLive =
-				(int)(PropsValues.COMBO_CHECK_TIMESTAMP_INTERVAL / Time.SECOND);
-
-			_fileContentBagPortalCache.put(
-				fileContentKey, fileContentBag, timeToLive);
-		}
-
-		return fileContentBag._fileContent;
-	}
-
-	protected RequestDispatcher getResourceRequestDispatcher(
-			HttpServletRequest request, HttpServletResponse response,
-			String modulePath)
-		throws Exception {
-
-		String portletId = getModulePortletId(modulePath);
-
-		Portlet portlet = PortletLocalServiceUtil.getPortletById(portletId);
-
-		if ((portlet == null) || portlet.isUndeployedPortlet()) {
-			return null;
-		}
-
-		String resourcePath = getResourcePath(modulePath);
-
-		if (!PortalUtil.isValidResourceId(resourcePath)) {
-			if (_log.isWarnEnabled()) {
-				_log.warn(
-					StringBundler.concat(
-						"Invalid resource ",
-						String.valueOf(request.getRequestURL()), "?",
-						request.getQueryString()));
-			}
-
-			return null;
-		}
-
-		PortletApp portletApp = portlet.getPortletApp();
-
-		ServletContext servletContext = portletApp.getServletContext();
-
-		return servletContext.getRequestDispatcher(resourcePath);
-	}
-
-	protected boolean validateModuleExtension(String moduleName)
-		throws Exception {
-
-		moduleName = getResourcePath(moduleName);
-
-		int index = moduleName.indexOf(CharPool.QUESTION);
-
-		if (index != -1) {
-			moduleName = moduleName.substring(0, index);
-		}
-
-		boolean validModuleExtension = false;
-
-		String[] fileExtensions = PrefsPropsUtil.getStringArray(
-			PropsKeys.COMBO_ALLOWED_FILE_EXTENSIONS, StringPool.COMMA);
-
-		for (String fileExtension : fileExtensions) {
-			if (StringPool.STAR.equals(fileExtension) ||
-				StringUtil.endsWith(moduleName, fileExtension)) {
-
-				validModuleExtension = true;
-
-				break;
-			}
-		}
-
-		return validModuleExtension;
-	}
-
-	private String _getModulePathExtension(String modulePath) {
-		String resourcePath = getResourcePath(modulePath);
-
-		int index = resourcePath.indexOf(CharPool.QUESTION);
-
-		if (index != -1) {
-			resourcePath = resourcePath.substring(0, index);
-		}
-
-		return FileUtil.getExtension(resourcePath);
-	}
-
-	private static final String _CSS_EXTENSION = "css";
-
-	private static final String _CSS_MINIFIED_DASH_SUFFIX = "-min.css";
-
-	private static final String _CSS_MINIFIED_DOT_SUFFIX = ".min.css";
-
-	private static final FileContentBag _EMPTY_FILE_CONTENT_BAG =
-		new FileContentBag(new byte[0], 0);
-
-	private static final String _JAVASCRIPT_MINIFIED_DASH_SUFFIX = "-min.js";
-
-	private static final String _JAVASCRIPT_MINIFIED_DOT_SUFFIX = ".min.js";
-
-	private static final Log _log = LogFactoryUtil.getLog(ComboServlet.class);
-
-	private static final PortalCache<String, byte[][]> _bytesArrayPortalCache =
-		PortalCacheHelperUtil.getPortalCache(
-			PortalCacheManagerNames.SINGLE_VM, ComboServlet.class.getName());
-	private static final PortalCache<String, FileContentBag>
-		_fileContentBagPortalCache = PortalCacheHelperUtil.getPortalCache(
-			PortalCacheManagerNames.SINGLE_VM, FileContentBag.class.getName());
-
-	private final Set<String> _protectedParameters = SetUtil.fromArray(
-		new String[] {
-			"b", "browserId", "minifierType", "languageId", "t", "themeId", "zx"
-		});
-
-	private static class FileContentBag implements Serializable {
-
-		public FileContentBag(byte[] fileContent, long lastModifiedTime) {
-			_fileContent = fileContent;
-			_lastModified = lastModifiedTime;
-		}
-
-		private final byte[] _fileContent;
-		private final long _lastModified;
-
-	}
+    }
 
 }

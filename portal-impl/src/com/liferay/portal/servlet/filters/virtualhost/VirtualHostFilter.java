@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,32 +14,29 @@
 
 package com.liferay.portal.servlet.filters.virtualhost;
 
-import com.liferay.petra.string.CharPool;
-import com.liferay.petra.string.StringPool;
-import com.liferay.portal.kernel.exception.LayoutFriendlyURLException;
-import com.liferay.portal.kernel.exception.NoSuchLayoutException;
-import com.liferay.portal.kernel.exception.PortalException;
+import com.liferay.portal.LayoutFriendlyURLException;
+import com.liferay.portal.NoSuchLayoutException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.model.Group;
-import com.liferay.portal.kernel.model.LayoutSet;
-import com.liferay.portal.kernel.service.LayoutLocalServiceUtil;
 import com.liferay.portal.kernel.struts.LastPath;
-import com.liferay.portal.kernel.util.HttpUtil;
-import com.liferay.portal.kernel.util.Portal;
-import com.liferay.portal.kernel.util.PortalUtil;
-import com.liferay.portal.kernel.util.StringBundler;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
-import com.liferay.portal.kernel.util.WebKeys;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.model.Company;
+import com.liferay.portal.model.Group;
+import com.liferay.portal.model.Layout;
+import com.liferay.portal.model.LayoutSet;
 import com.liferay.portal.model.impl.LayoutImpl;
+import com.liferay.portal.service.GroupLocalServiceUtil;
+import com.liferay.portal.service.LayoutLocalServiceUtil;
+import com.liferay.portal.service.LayoutSetLocalServiceUtil;
 import com.liferay.portal.servlet.I18nServlet;
 import com.liferay.portal.servlet.filters.BasePortalFilter;
+import com.liferay.portal.theme.ThemeDisplay;
 import com.liferay.portal.util.PortalInstances;
+import com.liferay.portal.util.PortalUtil;
 import com.liferay.portal.util.PropsValues;
+import com.liferay.portal.util.WebKeys;
 import com.liferay.portal.webserver.WebServerServlet;
-
-import java.util.Map;
+import org.apache.commons.lang.StringUtils;
 
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -47,6 +44,8 @@ import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Set;
 
 /**
  * <p>
@@ -66,74 +65,48 @@ public class VirtualHostFilter extends BasePortalFilter {
 
 		_servletContext = filterConfig.getServletContext();
 
-		String contextPath = PortalUtil.getPathContext();
+		_slashedKeywords =
+			new String[PropsValues.LAYOUT_FRIENDLY_URL_KEYWORDS.length];
 
-		String proxyPath = PortalUtil.getPathProxy();
+		for (int i = 0; i < PropsValues.LAYOUT_FRIENDLY_URL_KEYWORDS.length;
+				i++) {
 
-		if (!contextPath.isEmpty() && !proxyPath.isEmpty() &&
-			contextPath.startsWith(proxyPath)) {
+			String keyword = PropsValues.LAYOUT_FRIENDLY_URL_KEYWORDS[i];
 
-			contextPath = contextPath.substring(proxyPath.length());
+			if (keyword.contains(StringPool.PERIOD) ||
+				keyword.equals("_vti_") || keyword.equals("api") ||
+				keyword.equals("display_chart") ||
+				keyword.equals("sharepoint") ||
+				keyword.equals("software_catalog")) {
+
+				keyword = StringPool.SLASH + keyword;
+			}
+			else {
+				keyword = StringPool.SLASH + keyword + StringPool.SLASH;
+			}
+
+			_slashedKeywords[i] = keyword.toLowerCase();
 		}
-
-		_contextPath = contextPath;
 	}
 
 	@Override
 	public boolean isFilterEnabled(
 		HttpServletRequest request, HttpServletResponse response) {
 
-		String uri = request.getRequestURI();
+		StringBuffer requestURL = request.getRequestURL();
 
-		for (String extension : PropsValues.VIRTUAL_HOSTS_IGNORE_EXTENSIONS) {
-			if (uri.endsWith(extension)) {
-				return false;
-			}
+		if (isValidRequestURL(requestURL)) {
+			return true;
 		}
-
-		return true;
-	}
-
-	protected boolean isDocumentFriendlyURL(
-			HttpServletRequest request, long groupId, String friendlyURL)
-		throws PortalException {
-
-		if (friendlyURL.startsWith(_PATH_DOCUMENTS) &&
-			WebServerServlet.hasFiles(request)) {
-
-			String path = HttpUtil.fixPath(request.getPathInfo());
-
-			String[] pathArray = StringUtil.split(path, CharPool.SLASH);
-
-			if (pathArray.length == 2) {
-				try {
-					LayoutLocalServiceUtil.getFriendlyURLLayout(
-						groupId, false, friendlyURL);
-				}
-				catch (NoSuchLayoutException nsle) {
-
-					// LPS-52675
-
-					if (_log.isDebugEnabled()) {
-						_log.debug(nsle, nsle);
-					}
-
-					return true;
-				}
-			}
-			else {
-				return true;
-			}
+		else {
+			return false;
 		}
-
-		return false;
 	}
 
 	protected boolean isValidFriendlyURL(String friendlyURL) {
-		friendlyURL = StringUtil.toLowerCase(friendlyURL);
+		friendlyURL = friendlyURL.toLowerCase();
 
 		if (PortalInstances.isVirtualHostsIgnorePath(friendlyURL) ||
-			friendlyURL.startsWith(_PATH_MODULE_SLASH) ||
 			friendlyURL.startsWith(_PRIVATE_GROUP_SERVLET_MAPPING_SLASH) ||
 			friendlyURL.startsWith(_PRIVATE_USER_SERVLET_MAPPING_SLASH) ||
 			friendlyURL.startsWith(_PUBLIC_GROUP_SERVLET_MAPPING_SLASH)) {
@@ -141,11 +114,13 @@ public class VirtualHostFilter extends BasePortalFilter {
 			return false;
 		}
 
-		if (LayoutImpl.hasFriendlyURLKeyword(friendlyURL)) {
-			return false;
+		for (String keyword : _slashedKeywords) {
+			if (friendlyURL.startsWith(keyword)) {
+				return false;
+			}
 		}
 
-		int code = LayoutImpl.validateFriendlyURL(friendlyURL, false);
+		int code = LayoutImpl.validateFriendlyURL(friendlyURL);
 
 		if ((code > -1) &&
 			(code != LayoutFriendlyURLException.ENDS_WITH_SLASH)) {
@@ -156,10 +131,6 @@ public class VirtualHostFilter extends BasePortalFilter {
 		return true;
 	}
 
-	/**
-	 * @deprecated As of Judson (7.1.x), with no direct replacement
-	 */
-	@Deprecated
 	protected boolean isValidRequestURL(StringBuffer requestURL) {
 		if (requestURL == null) {
 			return false;
@@ -184,87 +155,88 @@ public class VirtualHostFilter extends BasePortalFilter {
 
 		long companyId = PortalInstances.getCompanyId(request);
 
-		String originalFriendlyURL = HttpUtil.normalizePath(
-			request.getRequestURI());
+		String contextPath = PortalUtil.getPathContext();
+
+		String originalFriendlyURL = request.getRequestURI();
 
 		String friendlyURL = originalFriendlyURL;
 
-		if (!friendlyURL.equals(StringPool.SLASH) && !_contextPath.isEmpty() &&
-			(friendlyURL.length() > _contextPath.length()) &&
-			friendlyURL.startsWith(_contextPath) &&
-			(friendlyURL.charAt(_contextPath.length()) == CharPool.SLASH)) {
-
-			friendlyURL = friendlyURL.substring(_contextPath.length());
+		if (request.getAttribute("ORIGINAL_FRIENDLY_URL") == null) {
+			request.setAttribute("ORIGINAL_FRIENDLY_URL", originalFriendlyURL);
 		}
 
-		int pos = friendlyURL.indexOf(CharPool.SEMICOLON);
+		if ((Validator.isNotNull(contextPath)) &&
+			(friendlyURL.indexOf(contextPath) != -1)) {
+
+			friendlyURL = friendlyURL.substring(contextPath.length());
+		}
+
+		int pos = friendlyURL.indexOf(StringPool.SEMICOLON);
 
 		if (pos != -1) {
 			friendlyURL = friendlyURL.substring(0, pos);
 		}
 
-		String i18nLanguageId = _findLanguageId(friendlyURL);
+		friendlyURL = StringUtil.replace(
+			friendlyURL, StringPool.DOUBLE_SLASH, StringPool.SLASH);
 
-		if (i18nLanguageId != null) {
-			friendlyURL = friendlyURL.substring(i18nLanguageId.length());
+		String i18nLanguageId = null;
+
+		Set<String> languageIds = I18nServlet.getLanguageIds();
+
+		for (String languageId : languageIds) {
+			if (StringUtil.startsWith(friendlyURL, languageId)) {
+				pos = friendlyURL.indexOf(CharPool.SLASH, 1);
+
+				if (((pos != -1) && (pos != languageId.length())) ||
+					((pos == -1) &&
+					 !friendlyURL.equalsIgnoreCase(languageId))) {
+
+					continue;
+				}
+
+				if (pos == -1) {
+					i18nLanguageId = languageId;
+					friendlyURL = StringPool.SLASH;
+				}
+				else {
+					i18nLanguageId = languageId.substring(0, pos);
+					friendlyURL = friendlyURL.substring(pos);
+				}
+
+				break;
+			}
 		}
 
-		int widgetServletMappingPos = 0;
-
-		if (friendlyURL.contains(_WIDGET_SERVLET_MAPPING_SLASH)) {
-			friendlyURL = StringUtil.replaceFirst(
-				friendlyURL, PropsValues.WIDGET_SERVLET_MAPPING,
-				StringPool.BLANK);
-
-			widgetServletMappingPos =
-				PropsValues.WIDGET_SERVLET_MAPPING.length();
-		}
+		friendlyURL = StringUtil.replace(
+			friendlyURL, PropsValues.WIDGET_SERVLET_MAPPING, StringPool.BLANK);
 
 		if (_log.isDebugEnabled()) {
 			_log.debug("Friendly URL " + friendlyURL);
 		}
-
+		
+		// LAKPLAT-1228: remove end slash in section or sub-section page url.
+		if (haveEndSlashInURL(request, response, friendlyURL)) {
+			return;
+		}
+		
 		if (!friendlyURL.equals(StringPool.SLASH) &&
 			!isValidFriendlyURL(friendlyURL)) {
 
 			_log.debug("Friendly URL is not valid");
 
-			if (i18nLanguageId != null) {
-				int offset =
-					originalFriendlyURL.length() - friendlyURL.length() -
-						(i18nLanguageId.length() + widgetServletMappingPos);
-
-				if (!originalFriendlyURL.regionMatches(
-						offset, i18nLanguageId, 0, i18nLanguageId.length())) {
-
-					String forwardURL = originalFriendlyURL;
-
-					if (offset > 0) {
-						String prefix = originalFriendlyURL.substring(
-							0, offset);
-
-						forwardURL = prefix.concat(i18nLanguageId);
-					}
-					else {
-						forwardURL = i18nLanguageId;
-					}
-
-					forwardURL = forwardURL.concat(friendlyURL);
-
-					RequestDispatcher requestDispatcher =
-						_servletContext.getRequestDispatcher(forwardURL);
-
-					requestDispatcher.forward(request, response);
-
-					return;
-				}
-			}
-
 			processFilter(
-				VirtualHostFilter.class.getName(), request, response,
-				filterChain);
+				VirtualHostFilter.class, request, response, filterChain);
 
 			return;
+		}
+		else if (friendlyURL.startsWith(_PATH_DOCUMENTS)) {
+			if (WebServerServlet.hasFiles(request)) {
+				processFilter(
+					VirtualHostFilter.class, request, response, filterChain);
+
+				return;
+			}
 		}
 
 		LayoutSet layoutSet = (LayoutSet)request.getAttribute(
@@ -276,61 +248,41 @@ public class VirtualHostFilter extends BasePortalFilter {
 
 		if (layoutSet == null) {
 			processFilter(
-				VirtualHostFilter.class.getName(), request, response,
-				filterChain);
+				VirtualHostFilter.class, request, response, filterChain);
 
 			return;
 		}
 
 		try {
-			Map<String, String[]> parameterMap = request.getParameterMap();
-
-			String parameters = StringPool.BLANK;
-
-			if (!parameterMap.isEmpty()) {
-				parameters = HttpUtil.parameterMapToString(parameterMap);
-			}
-
 			LastPath lastPath = new LastPath(
-				_contextPath, friendlyURL, parameters);
+				contextPath, friendlyURL, request.getParameterMap());
 
 			request.setAttribute(WebKeys.LAST_PATH, lastPath);
 
-			StringBundler sb = new StringBundler(5);
+			StringBundler forwardURL = new StringBundler(5);
 
 			if (i18nLanguageId != null) {
-				sb.append(i18nLanguageId);
+				forwardURL.append(i18nLanguageId);
 			}
 
 			if (originalFriendlyURL.startsWith(
 					PropsValues.WIDGET_SERVLET_MAPPING)) {
 
-				sb.append(PropsValues.WIDGET_SERVLET_MAPPING);
+				forwardURL.append(PropsValues.WIDGET_SERVLET_MAPPING);
 
 				friendlyURL = StringUtil.replaceFirst(
 					friendlyURL, PropsValues.WIDGET_SERVLET_MAPPING,
 					StringPool.BLANK);
 			}
 
-			if (friendlyURL.equals(StringPool.SLASH) ||
-				(PortalUtil.getPlidFromFriendlyURL(companyId, friendlyURL) <=
-					0)) {
+			long plid = PortalUtil.getPlidFromFriendlyURL(
+				companyId, friendlyURL);
 
-				Group group = layoutSet.getGroup();
+			if (plid <= 0) {
+				Group group = GroupLocalServiceUtil.getGroup(
+					layoutSet.getGroupId());
 
-				if (isDocumentFriendlyURL(
-						request, group.getGroupId(), friendlyURL)) {
-
-					processFilter(
-						VirtualHostFilter.class.getName(), request, response,
-						filterChain);
-
-					return;
-				}
-
-				if (group.isGuest() && friendlyURL.equals(StringPool.SLASH) &&
-					!layoutSet.isPrivateLayout()) {
-
+				if (group.isGuest() && friendlyURL.equals(StringPool.SLASH)) {
 					String homeURL = PortalUtil.getRelativeHomeURL(request);
 
 					if (Validator.isNotNull(homeURL)) {
@@ -340,34 +292,28 @@ public class VirtualHostFilter extends BasePortalFilter {
 				else {
 					if (layoutSet.isPrivateLayout()) {
 						if (group.isUser()) {
-							sb.append(_PRIVATE_USER_SERVLET_MAPPING);
+							forwardURL.append(_PRIVATE_USER_SERVLET_MAPPING);
 						}
 						else {
-							sb.append(_PRIVATE_GROUP_SERVLET_MAPPING);
+							forwardURL.append(_PRIVATE_GROUP_SERVLET_MAPPING);
 						}
 					}
 					else {
-						sb.append(_PUBLIC_GROUP_SERVLET_MAPPING);
+						forwardURL.append(_PUBLIC_GROUP_SERVLET_MAPPING);
 					}
 
-					sb.append(group.getFriendlyURL());
+					forwardURL.append(group.getFriendlyURL());
 				}
 			}
 
-			String forwardURLString = friendlyURL;
-
-			if (sb.index() > 0) {
-				sb.append(friendlyURL);
-
-				forwardURLString = sb.toString();
-			}
+			forwardURL.append(friendlyURL);
 
 			if (_log.isDebugEnabled()) {
-				_log.debug("Forward to " + forwardURLString);
+				_log.debug("Forward to " + forwardURL);
 			}
 
 			RequestDispatcher requestDispatcher =
-				_servletContext.getRequestDispatcher(forwardURLString);
+				_servletContext.getRequestDispatcher(forwardURL.toString());
 
 			requestDispatcher.forward(request, response);
 		}
@@ -375,43 +321,107 @@ public class VirtualHostFilter extends BasePortalFilter {
 			_log.error(e, e);
 
 			processFilter(
-				VirtualHostFilter.class.getName(), request, response,
-				filterChain);
+				VirtualHostFilter.class, request, response, filterChain);
 		}
 	}
-
-	private String _findLanguageId(String friendlyURL) {
-		if (friendlyURL.isEmpty() ||
-			(friendlyURL.charAt(0) != CharPool.SLASH)) {
-
-			return null;
+	
+	protected boolean haveEndSlashInURL(HttpServletRequest request, HttpServletResponse response, String uri) {
+		if (uri.lastIndexOf(StringPool.SLASH) == uri.length() - 1 && request.getParameterMap().size() == 0){
+			// Checked the ignored keywords in url to decrease the db load.
+			for (String keyword : IGNORE_SLASH_KEYWORDS) {
+				if (uri.startsWith(keyword)) {
+					return false;
+				}
+			}
+			Group group = getGroup(request);
+			if (group == null) {
+				return false;
+			}
+			String url = request.getRequestURL().toString();
+			StringBuffer sb = new StringBuffer(StringPool.BLANK);
+			sb.append(PortalUtil.getPathFriendlyURLPublic());
+			sb.append(group.getFriendlyURL());
+			String uriPrefix = sb.toString();
+			if (StringUtils.isNotEmpty(uri) && StringUtils.isNotEmpty(sb.toString())) {
+				String uriSuffix = uri;
+				// If the uri contains the prefix url(like "/web/XXX"), removed it.
+				if (uri.contains(uriPrefix)) {
+					uriSuffix = uri.substring(uriPrefix.length());
+				}
+				if (StringUtils.isNotEmpty(uriSuffix)) {
+					Layout friendlyURLLayout = null;
+					try {
+						// Get the valid friendlyURL (Change "/news/" to "/news")
+						uriSuffix = uriSuffix.substring(0, uriSuffix.length() - 1);
+						friendlyURLLayout = LayoutLocalServiceUtil.getFriendlyURLLayout(group.getGroupId(), false, uriSuffix);
+						if (friendlyURLLayout != null) {
+							response.sendRedirect(url.substring(0, url.length() - 1));
+							return true;
+						}
+					} catch (NoSuchLayoutException e) {
+						// Do nothing if could not get layout.
+					} catch (IOException e) {
+						_log.error("Response send redirect failed, url: " + url + " : " + e.getMessage());
+					} catch (Exception e) {
+						_log.error("Get friendlyURLLayout failed, friendlyURLLayout" + friendlyURLLayout + " : " + e.getMessage());
+					}
+				}
+			}
 		}
-
-		String lowerCaseLanguageId = friendlyURL;
-
-		int index = friendlyURL.indexOf(CharPool.SLASH, 1);
-
-		if (index != -1) {
-			lowerCaseLanguageId = friendlyURL.substring(0, index);
+		return false;
+	}
+	
+	protected Group getGroup(HttpServletRequest request) {
+		ThemeDisplay themeDisplay = (ThemeDisplay) request.getAttribute(com.liferay.portal.kernel.util.WebKeys.THEME_DISPLAY);
+		try {
+			if (themeDisplay != null) {
+				return themeDisplay.getLayout().getGroup();
+			}
 		}
-
-		lowerCaseLanguageId = StringUtil.toLowerCase(lowerCaseLanguageId);
-
-		Map<String, String> languageIds = I18nServlet.getLanguageIdsMap();
-
-		String languageId = languageIds.get(lowerCaseLanguageId);
-
-		if (languageId == null) {
-			return null;
+		catch (Exception e) {}
+		try {
+			LayoutSet layoutSet = LayoutSetLocalServiceUtil.getLayoutSet(request.getServerName());
+			return layoutSet.getGroup();
+		} catch (Exception e) {
 		}
-
-		return languageId;
+		try {
+			long companyId = 0;
+			if (themeDisplay != null) {
+				themeDisplay.getCompanyId();
+			}
+			else {
+				Long companyIdObj = (Long) request.getAttribute("COMPANY_ID");
+				if (companyIdObj != null) {
+					companyId = companyIdObj.longValue();
+				}
+				if (companyId == 0) {
+					Company company = (Company) request.getAttribute("COMPANY");
+					if (company != null) {
+						companyId = company.getCompanyId();
+					}
+					else {
+						companyId = PortalUtil.getCompanyId(request);
+					}
+				}
+			}
+			String fullURL = request.getRequestURI();
+			String friendlyURL = StringPool.SLASH;
+			int pos = fullURL.indexOf(StringPool.SLASH, 1);
+			if (pos > 0) {
+				int pos2 = fullURL.indexOf(StringPool.SLASH, pos + 1);
+				if (pos2 > 0) {
+					friendlyURL = fullURL.substring(pos, pos2);
+				} else {
+					friendlyURL = fullURL;
+				}
+			}
+			return GroupLocalServiceUtil.getFriendlyURLGroup(companyId, friendlyURL);
+		} catch (Exception e) {
+		}
+		return null;
 	}
 
 	private static final String _PATH_DOCUMENTS = "/documents/";
-
-	private static final String _PATH_MODULE_SLASH =
-		Portal.PATH_MODULE + StringPool.SLASH;
 
 	private static final String _PRIVATE_GROUP_SERVLET_MAPPING =
 		PropsValues.LAYOUT_FRIENDLY_URL_PRIVATE_GROUP_SERVLET_MAPPING;
@@ -431,13 +441,14 @@ public class VirtualHostFilter extends BasePortalFilter {
 	private static final String _PUBLIC_GROUP_SERVLET_MAPPING_SLASH =
 		_PUBLIC_GROUP_SERVLET_MAPPING + StringPool.SLASH;
 
-	private static final String _WIDGET_SERVLET_MAPPING_SLASH =
-		PropsValues.WIDGET_SERVLET_MAPPING + StringPool.SLASH;
+	private static Log _log = LogFactoryUtil.getLog(VirtualHostFilter.class);
 
-	private static final Log _log = LogFactoryUtil.getLog(
-		VirtualHostFilter.class);
-
-	private String _contextPath;
 	private ServletContext _servletContext;
+	private String[] _slashedKeywords;
+	private String[] IGNORE_SLASH_KEYWORDS = {"/group/", "/user/", "/combo/", "/html/", "/image/", "/photo",
+			"/_vti_", "/api", "/c/", "/delegate/", "/display_chart", "/dtd/", "/elqnow/", "/facebook/",
+			"/google_gadget/", "/language/", "/lucene/", "/netvibes/", "/osgi/", "/page/", "/pbhs/",
+			"/poller/", "/private/", "/public/", "/rest/", "/robots.txt", "/sharepoint", "/sitemap.xml",
+			"/software_catalog", "/tunnel-web/", "/wap/", "/widget/", "/xmlrpc/"};
 
 }

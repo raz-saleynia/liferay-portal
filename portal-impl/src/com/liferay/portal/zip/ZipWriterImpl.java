@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,24 +14,16 @@
 
 package com.liferay.portal.zip;
 
-import com.liferay.petra.memory.DeleteFileFinalizeAction;
-import com.liferay.petra.memory.FinalizeManager;
-import com.liferay.petra.string.StringPool;
 import com.liferay.portal.kernel.io.unsync.UnsyncByteArrayInputStream;
+import com.liferay.portal.kernel.io.unsync.UnsyncByteArrayOutputStream;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
 import com.liferay.portal.kernel.util.FileUtil;
-import com.liferay.portal.kernel.util.StringBundler;
+import com.liferay.portal.kernel.util.StringPool;
 import com.liferay.portal.kernel.util.SystemProperties;
 import com.liferay.portal.kernel.uuid.PortalUUIDUtil;
 import com.liferay.portal.kernel.zip.ZipWriter;
-import com.liferay.portal.util.PropsValues;
-
-import de.schlichtherle.io.ArchiveDetector;
-import de.schlichtherle.io.ArchiveException;
-import de.schlichtherle.io.DefaultArchiveDetector;
-import de.schlichtherle.io.File;
-import de.schlichtherle.io.FileOutputStream;
+import de.schlichtherle.io.*;
 import de.schlichtherle.io.archive.zip.ZipDriver;
 
 import java.io.IOException;
@@ -43,44 +35,51 @@ import java.io.OutputStream;
  */
 public class ZipWriterImpl implements ZipWriter {
 
+	static {
+		File.setDefaultArchiveDetector(
+			new DefaultArchiveDetector(
+				ArchiveDetector.ALL, "lar|" + ArchiveDetector.ALL.getSuffixes(),
+				new ZipDriver()));
+	}
+
 	public ZipWriterImpl() {
 		_file = new File(
-			StringBundler.concat(
-				SystemProperties.get(SystemProperties.TMP_DIR),
-				StringPool.SLASH, PortalUUIDUtil.generate(), ".zip"));
+			SystemProperties.get(SystemProperties.TMP_DIR) + StringPool.SLASH +
+				PortalUUIDUtil.generate() + ".zip");
 
 		_file.mkdir();
-
+/* disable: garbage collects too eagerly, leave caller to clean up
 		FinalizeManager.register(
-			_file.getDelegate(),
-			new DeleteFileFinalizeAction(_file.getAbsolutePath()),
-			FinalizeManager.PHANTOM_REFERENCE_FACTORY);
+			_file, new DeleteFileFinalizeAction(_file.getAbsolutePath()));
+*/			
 	}
 
 	public ZipWriterImpl(java.io.File file) {
-		_file = new File(file.getAbsolutePath());
+		_file = new File(file);
 
 		_file.mkdir();
 	}
 
-	@Override
 	public void addEntry(String name, byte[] bytes) throws IOException {
-		try (UnsyncByteArrayInputStream unsyncByteArrayInputStream =
-				new UnsyncByteArrayInputStream(bytes)) {
+		UnsyncByteArrayInputStream unsyncByteArrayInputStream =
+			new UnsyncByteArrayInputStream(bytes);
 
+		try {
 			addEntry(name, unsyncByteArrayInputStream);
+		}
+		finally {
+			unsyncByteArrayInputStream.close();
 		}
 	}
 
-	@Override
-	public void addEntry(String name, InputStream inputStream)
+	public void addEntry(String name, InputStream inpuStream)
 		throws IOException {
 
 		if (name.startsWith(StringPool.SLASH)) {
 			name = name.substring(1);
 		}
 
-		if (inputStream == null) {
+		if (inpuStream == null) {
 			return;
 		}
 
@@ -88,39 +87,44 @@ public class ZipWriterImpl implements ZipWriter {
 			_log.debug("Adding " + name);
 		}
 
-		try (OutputStream outputStream = new FileOutputStream(
-				new File(getPath() + StringPool.SLASH + name))) {
+		FileUtil.mkdirs(getPath());
 
-			File.cat(inputStream, outputStream);
+		OutputStream outputStream = new FileOutputStream(
+			new File(getPath() + StringPool.SLASH + name));
+
+		try {
+			File.cat(inpuStream, outputStream);
+		}
+		finally {
+			outputStream.close();
 		}
 	}
 
-	@Override
 	public void addEntry(String name, String s) throws IOException {
-		if (s == null) {
-			return;
-		}
-
 		addEntry(name, s.getBytes(StringPool.UTF8));
 	}
 
-	@Override
 	public void addEntry(String name, StringBuilder sb) throws IOException {
-		if (sb == null) {
-			return;
-		}
-
 		addEntry(name, sb.toString());
 	}
 
-	@Override
 	public byte[] finish() throws IOException {
-		java.io.File file = getFile();
+		UnsyncByteArrayOutputStream unsyncByteArrayOutputStream =
+			new UnsyncByteArrayOutputStream();
 
-		return FileUtil.getBytes(file);
+		InputStream inputStream = new FileInputStream(_file);
+
+		try {
+			File.cat(inputStream, unsyncByteArrayOutputStream);
+		}
+		finally {
+			unsyncByteArrayOutputStream.close();
+			inputStream.close();
+		}
+
+		return unsyncByteArrayOutputStream.toByteArray();
 	}
 
-	@Override
 	public java.io.File getFile() {
 		try {
 			File.umount(_file);
@@ -132,34 +136,12 @@ public class ZipWriterImpl implements ZipWriter {
 		return _file.getDelegate();
 	}
 
-	@Override
 	public String getPath() {
 		return _file.getPath();
 	}
 
-	@Override
-	public void umount() {
-		try {
-			File.umount(_file);
-		}
-		catch (ArchiveException ae) {
-			if (_log.isWarnEnabled()) {
-				_log.warn("Unable to unmount file entry", ae);
-			}
-		}
-	}
+	private static Log _log = LogFactoryUtil.getLog(ZipWriter.class);
 
-	private static final Log _log = LogFactoryUtil.getLog(ZipWriterImpl.class);
-
-	static {
-		File.setDefaultArchiveDetector(
-			new DefaultArchiveDetector(
-				ArchiveDetector.ALL, "lar|" + ArchiveDetector.ALL.getSuffixes(),
-				new ZipDriver(PropsValues.ZIP_FILE_NAME_ENCODING)));
-
-		TrueZIPHelperUtil.initialize();
-	}
-
-	private final File _file;
+	private File _file;
 
 }

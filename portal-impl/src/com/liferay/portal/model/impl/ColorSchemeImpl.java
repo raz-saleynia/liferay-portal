@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,199 +14,232 @@
 
 package com.liferay.portal.model.impl;
 
-import com.liferay.petra.string.CharPool;
+import com.endplay.portlet.admin.RolePortalPermissionUtil;
+import com.liferay.portal.kernel.exception.SystemException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.model.ColorScheme;
-import com.liferay.portal.kernel.util.PropertiesUtil;
-import com.liferay.portal.kernel.util.SafeProperties;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.model.ColorScheme;
+import com.liferay.portal.model.ExtColorScheme;
+import com.liferay.portal.model.User;
+import com.liferay.portal.service.UserLocalServiceUtil;
+import com.liferay.portal.util.PropsValues;
+import com.liferay.portlet.admin.util.OmniadminUtil;
+import org.apache.commons.collections.CollectionUtils;
 
 import java.io.IOException;
-
+import java.util.List;
 import java.util.Properties;
 
 /**
  * @author Brian Wing Shun Chan
  */
-public class ColorSchemeImpl implements ColorScheme {
+public class ColorSchemeImpl implements ExtColorScheme {
 
-	public ColorSchemeImpl() {
-		this(null, null, null);
-	}
+    public static String getDefaultRegularColorSchemeId() {
+        return PropsValues.DEFAULT_REGULAR_COLOR_SCHEME_ID;
+    }
 
-	public ColorSchemeImpl(String colorSchemeId) {
-		this(colorSchemeId, null, null);
-	}
+    public static String getDefaultWapColorSchemeId() {
+        return PropsValues.DEFAULT_WAP_COLOR_SCHEME_ID;
+    }
 
-	public ColorSchemeImpl(String colorSchemeId, String name, String cssClass) {
-		_colorSchemeId = colorSchemeId;
-		_name = name;
-		_cssClass = cssClass;
-	}
+    public static ColorScheme getNullColorScheme() {
+        return new ColorSchemeImpl(
+            getDefaultRegularColorSchemeId(), StringPool.BLANK,
+            StringPool.BLANK);
+    }
 
-	@Override
-	public int compareTo(ColorScheme colorScheme) {
-		return getName().compareTo(colorScheme.getName());
-	}
+    public ColorSchemeImpl() {
+    }
 
-	@Override
-	public boolean equals(Object obj) {
-		if (this == obj) {
-			return true;
-		}
+    public ColorSchemeImpl(String colorSchemeId) {
+        _colorSchemeId = colorSchemeId;
+    }
 
-		if (!(obj instanceof ColorScheme)) {
-			return false;
-		}
+    public ColorSchemeImpl(String colorSchemeId, String name, String cssClass) {
+        _colorSchemeId = colorSchemeId;
+        _name = name;
+        _cssClass = cssClass;
+    }
 
-		ColorScheme colorScheme = (ColorScheme)obj;
+    public int compareTo(ColorScheme colorScheme) {
+        return getName().compareTo(colorScheme.getName());
+    }
 
-		String colorSchemeId = colorScheme.getColorSchemeId();
+    @Override
+    public boolean equals(Object obj) {
+        if (obj == null) {
+            return false;
+        }
 
-		if (getColorSchemeId().equals(colorSchemeId)) {
-			return true;
-		}
+        ColorScheme colorScheme = null;
 
-		return false;
-	}
+        try {
+            colorScheme = (ColorScheme)obj;
+        }
+        catch (ClassCastException cce) {
+            return false;
+        }
 
-	@Override
-	public String getColorSchemeId() {
-		return _colorSchemeId;
-	}
+        String colorSchemeId = colorScheme.getColorSchemeId();
 
-	@Override
-	public String getColorSchemeImagesPath() {
-		return _colorSchemeImagesPath;
-	}
+        if (getColorSchemeId().equals(colorSchemeId)) {
+            return true;
+        }
+        else {
+            return false;
+        }
+    }
 
-	@Override
-	public String getColorSchemeThumbnailPath() {
+    public String getColorSchemeId() {
+        return _colorSchemeId;
+    }
 
-		// LEP-5270
+    public String getColorSchemeImagesPath() {
+        return _colorSchemeImagesPath;
+    }
 
-		if (Validator.isNotNull(_cssClass) &&
-			Validator.isNotNull(_colorSchemeImagesPath)) {
+    public String getColorSchemeThumbnailPath() {
 
-			int pos = _cssClass.indexOf(CharPool.SPACE);
+        // LEP-5270
 
-			if (pos > 0) {
-				if (_colorSchemeImagesPath.endsWith(
-						_cssClass.substring(0, pos))) {
+        if (Validator.isNotNull(_cssClass) &&
+            Validator.isNotNull(_colorSchemeImagesPath)) {
 
-					String subclassPath = StringUtil.replace(
-						_cssClass, CharPool.SPACE, CharPool.SLASH);
+            int pos = _cssClass.indexOf(CharPool.SPACE);
 
-					return _colorSchemeImagesPath + subclassPath.substring(pos);
-				}
-			}
-		}
+            if (pos > 0) {
+                if (_colorSchemeImagesPath.endsWith(
+                        _cssClass.substring(0, pos))) {
 
-		return _colorSchemeImagesPath;
-	}
+                    String subclassPath = StringUtil.replace(
+                        _cssClass, CharPool.SPACE, CharPool.SLASH);
 
-	@Override
-	public String getCssClass() {
-		return _cssClass;
-	}
+                    return _colorSchemeImagesPath + subclassPath.substring(pos);
+                }
+            }
+        }
 
-	@Override
-	public boolean getDefaultCs() {
-		return _defaultCs;
-	}
+        return _colorSchemeImagesPath;
+    }
 
-	@Override
-	public String getName() {
-		if (Validator.isNull(_name)) {
-			return _colorSchemeId;
-		}
+    public String getCssClass() {
+        return _cssClass;
+    }
 
-		return _name;
-	}
+    public boolean getDefaultCs() {
+        return _defaultCs;
+    }
 
-	@Override
-	public String getSetting(String key) {
-		//return _settingsProperties.getProperty(key);
+    public String getName() {
+        if (Validator.isNull(_name)) {
+            return _colorSchemeId;
+        }
+        else {
+            return _name;
+        }
+    }
 
-		// FIX ME
+    public String getSetting(String key) {
+        //return _settingsProperties.getProperty(key);
 
-		if (key.endsWith("-bg")) {
-			return "#FFFFFF";
-		}
+        // FIX ME
 
-		return "#000000";
-	}
+        if (key.endsWith("-bg")) {
+            return "#FFFFFF";
+        }
+        else {
+            return "#000000";
+        }
+    }
 
-	@Override
-	public String getSettings() {
-		return PropertiesUtil.toString(_settingsProperties);
-	}
+    public String getSettings() {
+        return PropertiesUtil.toString(_settingsProperties);
+    }
 
-	@Override
-	public Properties getSettingsProperties() {
-		return _settingsProperties;
-	}
+    public Properties getSettingsProperties() {
+        return _settingsProperties;
+    }
 
-	@Override
-	public int hashCode() {
-		return _colorSchemeId.hashCode();
-	}
+    @Override
+    public int hashCode() {
+        return _colorSchemeId.hashCode();
+    }
 
-	@Override
-	public boolean isDefaultCs() {
-		return _defaultCs;
-	}
+    public boolean isDefaultCs() {
+        return _defaultCs;
+    }
 
-	@Override
-	public void setColorSchemeImagesPath(String colorSchemeImagesPath) {
-		_colorSchemeImagesPath = colorSchemeImagesPath;
-	}
+    public void setColorSchemeImagesPath(String colorSchemeImagesPath) {
+        _colorSchemeImagesPath = colorSchemeImagesPath;
+    }
 
-	@Override
-	public void setCssClass(String cssClass) {
-		_cssClass = cssClass;
-	}
+    public void setCssClass(String cssClass) {
+        _cssClass = cssClass;
+    }
 
-	@Override
-	public void setDefaultCs(boolean defaultCs) {
-		_defaultCs = defaultCs;
-	}
+    public void setDefaultCs(boolean defaultCs) {
+        _defaultCs = defaultCs;
+    }
 
-	@Override
-	public void setName(String name) {
-		_name = name;
-	}
+    public void setName(String name) {
+        _name = name;
+    }
 
-	@Override
-	public void setSettings(String settings) {
-		_settingsProperties.clear();
+    public void setSettings(String settings) {
+        _settingsProperties.clear();
 
-		try {
-			PropertiesUtil.load(_settingsProperties, settings);
+        try {
+            PropertiesUtil.load(_settingsProperties, settings);
+            PropertiesUtil.trimKeys(_settingsProperties);
+        }
+        catch (IOException ioe) {
+            _log.error(ioe);
+        }
+    }
 
-			PropertiesUtil.trimKeys(_settingsProperties);
-		}
-		catch (IOException ioe) {
-			_log.error("Unable to load colors cheme properties", ioe);
-		}
-	}
+    public void setSettingsProperties(Properties settingsProperties) {
+        _settingsProperties = settingsProperties;
+    }
 
-	@Override
-	public void setSettingsProperties(Properties settingsProperties) {
-		_settingsProperties = settingsProperties;
-	}
+    @Override
+    public boolean isAvailableForUser(User user) {
+        if (OmniadminUtil.isOmniadmin(user.getUserId()) || RolePortalPermissionUtil.isEndplayOrClientAdmin(user.getUserId())) {
+            return true;
+        }
+        if (CollectionUtils.isNotEmpty(_availableOrganizationIds)) {
+            for (long organizationId : _availableOrganizationIds) {
+                try {
+                    if (UserLocalServiceUtil.hasOrganizationUser(organizationId, user.getUserId())) {
+                        return true;
+                    }
+                } catch (SystemException e) {
+                    _log.error(e);
+                }
+            }
+        }
+        return false;
+    }
 
-	private static final Log _log = LogFactoryUtil.getLog(
-		ColorSchemeImpl.class);
+    @Override
+    public void setAvailableOrgnizationIds(List<Long> availableOrganizationIds) {
+        if (CollectionUtils.isNotEmpty(availableOrganizationIds)) {
+            this._availableOrganizationIds = availableOrganizationIds;
+        }
+    }
 
-	private final String _colorSchemeId;
-	private String _colorSchemeImagesPath =
-		"${images-path}/color_schemes/${css-class}";
-	private String _cssClass;
-	private boolean _defaultCs;
-	private String _name;
-	private Properties _settingsProperties = new SafeProperties();
+    private static Log _log = LogFactoryUtil.getLog(ColorScheme.class);
+
+    private String _colorSchemeId;
+    private String _colorSchemeImagesPath =
+        "${images-path}/color_schemes/${css-class}";
+    private String _cssClass;
+    private boolean _defaultCs;
+    private String _name;
+    /* for LIN */
+    private List<Long> _availableOrganizationIds = null;
+    private Properties _settingsProperties = new SafeProperties();
+    
 
 }

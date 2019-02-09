@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2000-present Liferay, Inc. All rights reserved.
+ * Copyright (c) 2000-2013 Liferay, Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Lesser General Public License as published by the Free
@@ -14,283 +14,233 @@
 
 package com.liferay.portlet.asset.service.impl;
 
-import com.liferay.asset.kernel.exception.AssetTagException;
-import com.liferay.asset.kernel.exception.AssetTagNameException;
-import com.liferay.asset.kernel.exception.DuplicateTagException;
-import com.liferay.asset.kernel.model.AssetEntry;
-import com.liferay.asset.kernel.model.AssetTag;
-import com.liferay.petra.string.StringPool;
-import com.liferay.portal.kernel.cache.thread.local.ThreadLocalCachable;
+import com.liferay.portal.kernel.cache.ThreadLocalCachable;
 import com.liferay.portal.kernel.dao.orm.QueryUtil;
 import com.liferay.portal.kernel.exception.PortalException;
-import com.liferay.portal.kernel.model.Group;
-import com.liferay.portal.kernel.model.SystemEventConstants;
-import com.liferay.portal.kernel.model.User;
-import com.liferay.portal.kernel.search.BaseModelSearchResult;
-import com.liferay.portal.kernel.search.Document;
-import com.liferay.portal.kernel.search.Field;
-import com.liferay.portal.kernel.search.Hits;
-import com.liferay.portal.kernel.search.Indexable;
-import com.liferay.portal.kernel.search.IndexableType;
-import com.liferay.portal.kernel.search.Indexer;
-import com.liferay.portal.kernel.search.IndexerRegistryUtil;
-import com.liferay.portal.kernel.search.QueryConfig;
-import com.liferay.portal.kernel.search.SearchContext;
-import com.liferay.portal.kernel.search.SearchException;
-import com.liferay.portal.kernel.search.Sort;
-import com.liferay.portal.kernel.service.ServiceContext;
-import com.liferay.portal.kernel.service.ServiceContextThreadLocal;
-import com.liferay.portal.kernel.systemevent.SystemEvent;
-import com.liferay.portal.kernel.util.ArrayUtil;
-import com.liferay.portal.kernel.util.GetterUtil;
-import com.liferay.portal.kernel.util.ListUtil;
-import com.liferay.portal.kernel.util.StringUtil;
-import com.liferay.portal.kernel.util.Validator;
+import com.liferay.portal.kernel.exception.SystemException;
+import com.liferay.portal.kernel.log.Log;
+import com.liferay.portal.kernel.log.LogFactoryUtil;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.model.ResourceConstants;
+import com.liferay.portal.model.User;
+import com.liferay.portal.service.ServiceContext;
+import com.liferay.portal.util.PortalUtil;
+import com.liferay.portal.util.PropsValues;
+import com.liferay.portlet.asset.AssetTagException;
+import com.liferay.portlet.asset.DuplicateTagException;
+import com.liferay.portlet.asset.NoSuchTagException;
+import com.liferay.portlet.asset.model.AssetEntry;
+import com.liferay.portlet.asset.model.AssetTag;
+import com.liferay.portlet.asset.model.AssetTagProperty;
 import com.liferay.portlet.asset.service.base.AssetTagLocalServiceBaseImpl;
-import com.liferay.portlet.asset.util.AssetUtil;
-import com.liferay.portlet.asset.util.comparator.AssetTagNameComparator;
-import com.liferay.social.kernel.util.SocialCounterPeriodUtil;
-
-import java.io.Serializable;
+import com.liferay.portlet.social.util.SocialCounterPeriodUtil;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.Date;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Provides the local service for accessing, adding, checking, deleting,
- * merging, and updating asset tags.
- *
  * @author Brian Wing Shun Chan
  * @author Alvaro del Castillo
  * @author Jorge Ferrer
  * @author Bruno Farache
  */
 public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
-
-	/**
-	 * Adds an asset tag.
-	 *
-	 * @param  userId the primary key of the user adding the asset tag
-	 * @param  groupId the primary key of the group in which the asset tag is to
-	 *         be added
-	 * @param  name the asset tag's name
-	 * @param  serviceContext the service context to be applied
-	 * @return the asset tag that was added
-	 */
-	@Indexable(type = IndexableType.REINDEX)
+	public static final char[] INVALID_CHARACTERS = new char[] { CharPool.NEW_LINE, CharPool.RETURN };
 	@Override
 	public AssetTag addTag(
-			long userId, long groupId, String name,
+			long userId, String name, String[] tagProperties,
 			ServiceContext serviceContext)
-		throws PortalException {
+			throws PortalException, SystemException {
 
 		// Tag
 
-		User user = userLocalService.getUser(userId);
+		User user = userPersistence.findByPrimaryKey(userId);
+		long groupId = serviceContext.getScopeGroupId();
+
+		if (tagProperties == null) {
+			tagProperties = new String[0];
+		}
+
+		Date now = new Date();
 
 		long tagId = counterLocalService.increment();
 
 		AssetTag tag = assetTagPersistence.create(tagId);
 
-		tag.setUuid(serviceContext.getUuid());
 		tag.setGroupId(groupId);
 		tag.setCompanyId(user.getCompanyId());
 		tag.setUserId(user.getUserId());
 		tag.setUserName(user.getFullName());
+		tag.setCreateDate(now);
+		tag.setModifiedDate(now);
 
-		name = StringUtil.toLowerCase(StringUtil.trim(name));
+		name = name.trim();
+		name = name.toLowerCase();
 
 		if (hasTag(groupId, name)) {
 			throw new DuplicateTagException(
-				"A tag with the name " + name + " already exists");
+					"A tag with the name " + name + " already exists");
+		}
+
+		if (name != null && name.length() > 300) {
+			name = name.substring(0, 300);
 		}
 
 		validate(name);
 
 		tag.setName(name);
 
-		assetTagPersistence.update(tag);
+		assetTagPersistence.update(tag, false);
+
+		// Resources
+
+		if (serviceContext.isAddGroupPermissions() ||
+				serviceContext.isAddGuestPermissions()) {
+
+			addTagResources(
+					tag, serviceContext.isAddGroupPermissions(),
+					serviceContext.isAddGuestPermissions());
+		}
+		else {
+			addTagResources(
+					tag, serviceContext.getGroupPermissions(),
+					serviceContext.getGuestPermissions());
+		}
+
+		// Properties
+
+		for (int i = 0; i < tagProperties.length; i++) {
+			String[] tagProperty = StringUtil.split(
+					tagProperties[i], CharPool.COLON);
+
+			String key = StringPool.BLANK;
+
+			if (tagProperty.length > 0) {
+				key = GetterUtil.getString(tagProperty[0]);
+			}
+
+			String value = StringPool.BLANK;
+
+			if (tagProperty.length > 1) {
+				value = GetterUtil.getString(tagProperty[1]);
+			}
+
+			if (Validator.isNotNull(key)) {
+				assetTagPropertyLocalService.addTagProperty(
+						userId, tagId, key, value);
+			}
+		}
 
 		return tag;
 	}
 
-	/**
-	 * Returns the asset tags matching the group and names, creating new asset
-	 * tags matching the names if the group doesn't already have them.
-	 *
-	 * <p>
-	 * For each name, if an asset tag with the name doesn't already exist in the
-	 * group, this method creates a new asset tag with the name in the group.
-	 * </p>
-	 *
-	 * @param  userId the primary key of the user checking the asset tags
-	 * @param  group the group in which to check the asset tags
-	 * @param  names the asset tag names
-	 * @return the asset tags matching the group and names and new asset tags
-	 *         matching the names that don't already exist in the group
-	 */
 	@Override
-	public List<AssetTag> checkTags(long userId, Group group, String[] names)
-		throws PortalException {
+	public void addTagResources(
+			AssetTag tag, boolean addGroupPermissions,
+			boolean addGuestPermissions)
+			throws PortalException, SystemException {
 
-		List<AssetTag> tags = new ArrayList<>();
+		resourceLocalService.addResources(
+				tag.getCompanyId(), tag.getGroupId(), tag.getUserId(),
+				AssetTag.class.getName(), tag.getTagId(), false,
+				addGroupPermissions, addGuestPermissions);
+	}
+
+	@Override
+	public void addTagResources(
+			AssetTag tag, String[] groupPermissions, String[] guestPermissions)
+			throws PortalException, SystemException {
+
+		resourceLocalService.addModelResources(
+				tag.getCompanyId(), tag.getGroupId(), tag.getUserId(),
+				AssetTag.class.getName(), tag.getTagId(), groupPermissions,
+				guestPermissions);
+	}
+
+	@Override
+	public void checkTags(long userId, long groupId, String[] names)
+			throws PortalException, SystemException {
 
 		for (String name : names) {
-			name = StringUtil.toLowerCase(StringUtil.trim(name));
-
-			AssetTag tag = fetchTag(group.getGroupId(), name);
-
-			if (tag == null) {
+			try {
+				getTag(groupId, name);
+			}
+			catch (NoSuchTagException nste) {
 				ServiceContext serviceContext = new ServiceContext();
 
 				serviceContext.setAddGroupPermissions(true);
 				serviceContext.setAddGuestPermissions(true);
-				serviceContext.setScopeGroupId(group.getGroupId());
+				serviceContext.setScopeGroupId(groupId);
 
-				tag = addTag(userId, group.getGroupId(), name, serviceContext);
-			}
-
-			if (tag != null) {
-				tags.add(tag);
+				addTag(
+						userId, name, PropsValues.ASSET_TAG_PROPERTIES_DEFAULT,
+						serviceContext);
 			}
 		}
-
-		return tags;
 	}
 
-	/**
-	 * Returns the asset tags matching the group and names, creating new asset
-	 * tags matching the names if the group doesn't already have them.
-	 *
-	 * @param  userId the primary key of the user checking the asset tags
-	 * @param  groupId the primary key of the group in which check the asset
-	 *         tags
-	 * @param  names the asset tag names
-	 * @return the asset tags matching the group and names and new asset tags
-	 *         matching the names that don't already exist in the group
-	 */
-	@Override
-	public List<AssetTag> checkTags(long userId, long groupId, String[] names)
-		throws PortalException {
-
-		Group group = groupLocalService.getGroup(groupId);
-
-		return checkTags(userId, group, names);
-	}
-
-	/**
-	 * Decrements the number of assets to which the asset tag has been applied.
-	 *
-	 * @param  tagId the primary key of the asset tag
-	 * @param  classNameId the class name ID of the entity to which the asset
-	 *         tag had been applied
-	 * @return the asset tag
-	 */
-	@Indexable(type = IndexableType.REINDEX)
 	@Override
 	public AssetTag decrementAssetCount(long tagId, long classNameId)
-		throws PortalException {
+			throws PortalException, SystemException {
 
 		AssetTag tag = assetTagPersistence.findByPrimaryKey(tagId);
 
 		tag.setAssetCount(Math.max(0, tag.getAssetCount() - 1));
 
-		assetTagPersistence.update(tag);
+		assetTagPersistence.update(tag, false);
+
+		assetTagStatsLocalService.updateTagStats(tagId, classNameId);
 
 		return tag;
 	}
 
-	/**
-	 * Deletes all asset tags in the group.
-	 *
-	 * @param groupId the primary key of the group in which to delete all asset
-	 *        tags
-	 */
 	@Override
-	public void deleteGroupTags(long groupId) throws PortalException {
-		List<AssetTag> tags = getGroupTags(groupId);
-
-		for (AssetTag tag : tags) {
-			assetTagLocalService.deleteTag(tag);
-		}
-	}
-
-	/**
-	 * Deletes the asset tag.
-	 *
-	 * @param tag the asset tag to be deleted
-	 */
-	@Override
-	@SystemEvent(type = SystemEventConstants.TYPE_DELETE)
-	public void deleteTag(AssetTag tag) throws PortalException {
+	public void deleteTag(AssetTag tag)
+			throws PortalException, SystemException {
 
 		// Entries
 
 		List<AssetEntry> entries = assetTagPersistence.getAssetEntries(
-			tag.getTagId());
+				tag.getTagId());
 
 		// Tag
 
 		assetTagPersistence.remove(tag);
 
+		// Resources
+
+		resourceLocalService.deleteResource(
+				tag.getCompanyId(), AssetTag.class.getName(),
+				ResourceConstants.SCOPE_INDIVIDUAL, tag.getTagId());
+
+		// Properties
+
+		assetTagPropertyLocalService.deleteTagProperties(tag.getTagId());
+
 		// Indexer
 
 		assetEntryLocalService.reindex(entries);
-
-		Indexer<AssetTag> indexer = IndexerRegistryUtil.nullSafeGetIndexer(
-			AssetTag.class);
-
-		indexer.delete(tag);
 	}
 
-	/**
-	 * Deletes the asset tag.
-	 *
-	 * @param tagId the primary key of the asset tag
-	 */
 	@Override
-	public void deleteTag(long tagId) throws PortalException {
+	public void deleteTag(long tagId) throws PortalException, SystemException {
 		AssetTag tag = assetTagPersistence.findByPrimaryKey(tagId);
 
-		assetTagLocalService.deleteTag(tag);
+		deleteTag(tag);
 	}
 
-	/**
-	 * Returns the asset tag with the name in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  name the asset tag's name
-	 * @return the asset tag with the name in the group or <code>null</code> if
-	 *         it could not be found
-	 */
 	@Override
-	public AssetTag fetchTag(long groupId, String name) {
-		return assetTagPersistence.fetchByG_N(groupId, name);
-	}
-
-	/**
-	 * Returns the asset tags of the asset entry.
-	 *
-	 * @param  entryId the primary key of the asset entry
-	 * @return the asset tags of the asset entry
-	 */
-	@Override
-	public List<AssetTag> getEntryTags(long entryId) {
+	public List<AssetTag> getEntryTags(long entryId) throws SystemException {
 		return assetEntryPersistence.getAssetTags(entryId);
 	}
 
-	/**
-	 * Returns the asset tags in the groups.
-	 *
-	 * @param  groupIds the primary keys of the groups
-	 * @return the asset tags in the groups
-	 */
 	@Override
-	public List<AssetTag> getGroupsTags(long[] groupIds) {
-		List<AssetTag> groupsTags = new ArrayList<>();
+	public List<AssetTag> getGroupsTags(long[] groupIds)
+			throws SystemException {
+
+		List<AssetTag> groupsTags = new ArrayList<AssetTag>();
 
 		for (long groupId : groupIds) {
 			List<AssetTag> groupTags = getGroupTags(groupId);
@@ -301,147 +251,105 @@ public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
 		return groupsTags;
 	}
 
-	/**
-	 * Returns the asset tags in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @return the asset tags in the group
-	 */
 	@Override
-	public List<AssetTag> getGroupTags(long groupId) {
+	public List<AssetTag> getGroupTags(long groupId) throws SystemException {
 		return assetTagPersistence.findByGroupId(groupId);
 	}
 
-	/**
-	 * Returns a range of all the asset tags in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  start the lower bound of the range of asset tags
-	 * @param  end the upper bound of the range of asset tags (not inclusive)
-	 * @return the range of matching asset tags
-	 */
 	@Override
-	public List<AssetTag> getGroupTags(long groupId, int start, int end) {
+	public List<AssetTag> getGroupTags(long groupId, int start, int end)
+			throws SystemException {
+
 		return assetTagPersistence.findByGroupId(groupId, start, end);
 	}
 
-	/**
-	 * Returns the number of asset tags in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @return the number of asset tags in the group
-	 */
 	@Override
-	public int getGroupTagsCount(long groupId) {
+	public int getGroupTagsCount(long groupId) throws SystemException {
 		return assetTagPersistence.countByGroupId(groupId);
 	}
 
 	@Override
 	public List<AssetTag> getSocialActivityCounterOffsetTags(
-		long groupId, String socialActivityCounterName, int startOffset,
-		int endOffset) {
+			long groupId, String socialActivityCounterName, int startOffset,
+			int endOffset)
+			throws SystemException {
 
 		int startPeriod = SocialCounterPeriodUtil.getStartPeriod(startOffset);
 		int endPeriod = SocialCounterPeriodUtil.getEndPeriod(endOffset);
 
 		return getSocialActivityCounterPeriodTags(
-			groupId, socialActivityCounterName, startPeriod, endPeriod);
+				groupId, socialActivityCounterName, startPeriod, endPeriod);
 	}
 
 	@Override
 	public List<AssetTag> getSocialActivityCounterPeriodTags(
-		long groupId, String socialActivityCounterName, int startPeriod,
-		int endPeriod) {
+			long groupId, String socialActivityCounterName, int startPeriod,
+			int endPeriod)
+			throws SystemException {
 
 		int offset = SocialCounterPeriodUtil.getOffset(endPeriod);
 
 		int periodLength = SocialCounterPeriodUtil.getPeriodLength(offset);
 
 		return assetTagFinder.findByG_N_S_E(
-			groupId, socialActivityCounterName, startPeriod, endPeriod,
-			periodLength);
+				groupId, socialActivityCounterName, startPeriod, endPeriod,
+				periodLength);
 	}
 
-	/**
-	 * Returns the asset tag with the primary key.
-	 *
-	 * @param  tagId the primary key of the asset tag
-	 * @return the asset tag with the primary key
-	 */
 	@Override
-	public AssetTag getTag(long tagId) throws PortalException {
+	public AssetTag getTag(long tagId) throws PortalException, SystemException {
 		return assetTagPersistence.findByPrimaryKey(tagId);
 	}
 
-	/**
-	 * Returns the asset tag with the name in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  name the name of the asset tag
-	 * @return the asset tag with the name in the group
-	 */
 	@Override
-	public AssetTag getTag(long groupId, String name) throws PortalException {
-		return assetTagPersistence.findByG_N(groupId, name);
+	public AssetTag getTag(long groupId, String name)
+			throws PortalException, SystemException {
+
+		return assetTagFinder.findByG_N(groupId, name);
 	}
 
-	/**
-	 * Returns the primary keys of the asset tags with the names in the group.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  names the names of the asset tags
-	 * @return the primary keys of the asset tags with the names in the group
-	 */
 	@Override
-	public long[] getTagIds(long groupId, String[] names) {
-		List<Long> tagIds = new ArrayList<>(names.length);
+	public long[] getTagIds(long groupId, String[] names)
+			throws PortalException, SystemException {
+
+		List<Long> tagIds = new ArrayList<Long>(names.length);
 
 		for (String name : names) {
-			AssetTag tag = fetchTag(groupId, name);
+			try {
+				AssetTag tag = getTag(groupId, name);
 
-			if (tag == null) {
-				continue;
+				tagIds.add(tag.getTagId());
 			}
-
-			tagIds.add(tag.getTagId());
+			catch (NoSuchTagException nste) {
+			}
 		}
 
 		return ArrayUtil.toArray(tagIds.toArray(new Long[tagIds.size()]));
 	}
 
-	/**
-	 * Returns the primary keys of the asset tags with the name in the groups.
-	 *
-	 * @param  groupIds the primary keys of the groups
-	 * @param  name the name of the asset tags
-	 * @return the primary keys of the asset tags with the name in the groups
-	 */
 	@Override
-	public long[] getTagIds(long[] groupIds, String name) {
-		List<Long> tagIds = new ArrayList<>(groupIds.length);
+	public long[] getTagIds(long[] groupIds, String name)
+			throws PortalException, SystemException {
+
+		List<Long> tagIds = new ArrayList<Long>(groupIds.length);
 
 		for (long groupId : groupIds) {
-			AssetTag tag = fetchTag(groupId, name);
+			try {
+				AssetTag tag = getTag(groupId, name);
 
-			if (tag == null) {
-				continue;
+				tagIds.add(tag.getTagId());
 			}
-
-			tagIds.add(tag.getTagId());
+			catch (NoSuchTagException nste) {
+			}
 		}
 
 		return ArrayUtil.toArray(tagIds.toArray(new Long[tagIds.size()]));
 	}
 
-	/**
-	 * Returns the primary keys of the asset tags with the names in the groups.
-	 *
-	 * @param  groupIds the primary keys of the groups
-	 * @param  names the names of the asset tags
-	 * @return the primary keys of the asset tags with the names in the groups
-	 */
 	@Override
-	public long[] getTagIds(long[] groupIds, String[] names) {
+	public long[] getTagIds(long[] groupIds, String[] names)
+			throws PortalException, SystemException {
+
 		long[] tagsIds = new long[0];
 
 		for (long groupId : groupIds) {
@@ -451,80 +359,36 @@ public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
 		return tagsIds;
 	}
 
-	/**
-	 * Returns the primary keys of the asset tags with the names.
-	 *
-	 * @param  name the name of the asset tags
-	 * @return the primary keys of the asset tags with the names
-	 */
 	@Override
-	public long[] getTagIds(String name) {
-		List<AssetTag> tags = assetTagPersistence.findByName(name);
-
-		List<Long> tagIds = new ArrayList<>(tags.size());
-
-		for (AssetTag tag : tags) {
-			tagIds.add(tag.getTagId());
-		}
-
-		return ArrayUtil.toArray(tagIds.toArray(new Long[tagIds.size()]));
-	}
-
-	/**
-	 * Returns the names of all the asset tags.
-	 *
-	 * @return the names of all the asset tags
-	 */
-	@Override
-	public String[] getTagNames() {
+	public String[] getTagNames() throws SystemException {
 		return getTagNames(getTags());
 	}
 
-	/**
-	 * Returns the names of the asset tags of the entity.
-	 *
-	 * @param  classNameId the class name ID of the entity
-	 * @param  classPK the primary key of the entity
-	 * @return the names of the asset tags of the entity
-	 */
 	@Override
-	public String[] getTagNames(long classNameId, long classPK) {
+	public String[] getTagNames(long classNameId, long classPK)
+			throws SystemException {
+
 		return getTagNames(getTags(classNameId, classPK));
 	}
 
-	/**
-	 * Returns the names of the asset tags of the entity
-	 *
-	 * @param  className the class name of the entity
-	 * @param  classPK the primary key of the entity
-	 * @return the names of the asset tags of the entity
-	 */
 	@Override
-	public String[] getTagNames(String className, long classPK) {
+	public String[] getTagNames(String className, long classPK)
+			throws SystemException {
+
 		return getTagNames(getTags(className, classPK));
 	}
 
-	/**
-	 * Returns all the asset tags.
-	 *
-	 * @return the asset tags
-	 */
 	@Override
-	public List<AssetTag> getTags() {
+	public List<AssetTag> getTags() throws SystemException {
 		return assetTagPersistence.findAll();
 	}
 
-	/**
-	 * Returns the asset tags of the entity.
-	 *
-	 * @param  classNameId the class name ID of the entity
-	 * @param  classPK the primary key of the entity
-	 * @return the asset tags of the entity
-	 */
 	@Override
-	public List<AssetTag> getTags(long classNameId, long classPK) {
+	public List<AssetTag> getTags(long classNameId, long classPK)
+			throws SystemException {
+
 		AssetEntry entry = assetEntryPersistence.fetchByC_C(
-			classNameId, classPK);
+				classNameId, classPK);
 
 		if (entry == null) {
 			return Collections.emptyList();
@@ -534,161 +398,126 @@ public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
 	}
 
 	@Override
-	public List<AssetTag> getTags(long groupId, long classNameId, String name) {
+	public List<AssetTag> getTags(long groupId, long classNameId, String name)
+			throws SystemException {
+
 		return assetTagFinder.findByG_C_N(
-			groupId, classNameId, name, QueryUtil.ALL_POS, QueryUtil.ALL_POS,
-			null);
+				groupId, classNameId, name, QueryUtil.ALL_POS, QueryUtil.ALL_POS,
+				null);
 	}
 
 	@Override
 	public List<AssetTag> getTags(
-		long groupId, long classNameId, String name, int start, int end) {
+			long groupId, long classNameId, String name, int start, int end)
+			throws SystemException {
 
 		return assetTagFinder.findByG_C_N(
-			groupId, classNameId, name, start, end, null);
+				groupId, classNameId, name, start, end, null);
 	}
 
-	/**
-	 * Returns the asset tags of the entity.
-	 *
-	 * @param  className the class name of the entity
-	 * @param  classPK the primary key of the entity
-	 * @return the asset tags of the entity
-	 */
 	@Override
 	@ThreadLocalCachable
-	public List<AssetTag> getTags(String className, long classPK) {
-		long classNameId = classNameLocalService.getClassNameId(className);
+	public List<AssetTag> getTags(String className, long classPK)
+			throws SystemException {
+
+		long classNameId = PortalUtil.getClassNameId(className);
 
 		return getTags(classNameId, classPK);
 	}
 
 	@Override
-	public int getTagsSize(long groupId, long classNameId, String name) {
+	public int getTagsSize(long groupId, long classNameId, String name)
+			throws SystemException {
+
 		return assetTagFinder.countByG_C_N(groupId, classNameId, name);
 	}
 
 	@Override
-	public int getTagsSize(long groupId, String name) {
-		return assetTagFinder.countByG_N(groupId, name);
-	}
+	public boolean hasTag(long groupId, String name)
+			throws PortalException, SystemException {
 
-	/**
-	 * Returns <code>true</code> if the group contains an asset tag with the
-	 * name.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  name the name of the asset tag
-	 * @return <code>true</code> if the group contains an asset tag with the
-	 *         name; <code>false</code> otherwise.
-	 */
-	@Override
-	public boolean hasTag(long groupId, String name) {
-		AssetTag tag = fetchTag(groupId, name);
+		try {
+			getTag(groupId, name);
 
-		if (tag != null) {
 			return true;
 		}
-
-		return false;
+		catch (NoSuchTagException nste) {
+			return false;
+		}
 	}
 
-	/**
-	 * Increments the number of assets to which the asset tag has been applied.
-	 *
-	 * @param  tagId the primary key of the asset tag
-	 * @param  classNameId the class name ID of the entity to which the asset
-	 *         tag is being applied
-	 * @return the asset tag
-	 */
-	@Indexable(type = IndexableType.REINDEX)
 	@Override
 	public AssetTag incrementAssetCount(long tagId, long classNameId)
-		throws PortalException {
+			throws PortalException, SystemException {
 
 		AssetTag tag = assetTagPersistence.findByPrimaryKey(tagId);
 
 		tag.setAssetCount(tag.getAssetCount() + 1);
 
-		assetTagPersistence.update(tag);
+		assetTagPersistence.update(tag, false);
+
+		assetTagStatsLocalService.updateTagStats(tagId, classNameId);
 
 		return tag;
 	}
 
-	/**
-	 * Replaces all occurrences of the first asset tag with the second asset tag
-	 * and deletes the first asset tag.
-	 *
-	 * @param fromTagId the primary key of the asset tag to be replaced
-	 * @param toTagId the primary key of the asset tag to apply to the asset
-	 *        entries of the other asset tag
-	 */
 	@Override
-	public void mergeTags(long fromTagId, long toTagId) throws PortalException {
+	public void mergeTags(
+			long fromTagId, long toTagId, boolean overrideProperties)
+			throws PortalException, SystemException {
+
 		List<AssetEntry> entries = assetTagPersistence.getAssetEntries(
-			fromTagId);
+				fromTagId);
 
 		assetTagPersistence.addAssetEntries(toTagId, entries);
 
-		deleteTag(fromTagId);
+		List<AssetTagProperty> tagProperties =
+				assetTagPropertyPersistence.findByTagId(fromTagId);
 
-		for (AssetEntry entry : entries) {
-			incrementAssetCount(toTagId, entry.getClassNameId());
+		for (AssetTagProperty fromTagProperty : tagProperties) {
+			AssetTagProperty toTagProperty =
+					assetTagPropertyPersistence.fetchByT_K(
+							toTagId, fromTagProperty.getKey());
+
+			if (overrideProperties && (toTagProperty != null)) {
+				toTagProperty.setValue(fromTagProperty.getValue());
+
+				assetTagPropertyPersistence.update(toTagProperty, false);
+			}
+			else if (toTagProperty == null) {
+				fromTagProperty.setTagId(toTagId);
+
+				assetTagPropertyPersistence.update(fromTagProperty, false);
+			}
 		}
+
+		deleteTag(fromTagId);
 	}
 
-	/**
-	 * Returns the asset tags in the group whose names match the pattern.
-	 *
-	 * @param  groupId the primary key of the group
-	 * @param  name the pattern to match
-	 * @param  start the lower bound of the range of asset tags
-	 * @param  end the upper bound of the range of asset tags (not inclusive)
-	 * @return the asset tags in the group whose names match the pattern
-	 */
 	@Override
 	public List<AssetTag> search(
-		long groupId, String name, int start, int end) {
+			long groupId, String name, String[] tagProperties, int start,
+			int end)
+			throws SystemException {
 
-		return search(new long[] {groupId}, name, start, end);
+		return search(new long[] {groupId}, name, tagProperties, start, end);
 	}
 
-	/**
-	 * Returns the asset tags in the groups whose names match the pattern.
-	 *
-	 * @param  groupIds the primary keys of the groups
-	 * @param  name the pattern to match
-	 * @param  start the lower bound of the range of asset tags
-	 * @param  end the upper bound of the range of asset tags (not inclusive)
-	 * @return the asset tags in the groups whose names match the pattern
-	 */
 	@Override
 	public List<AssetTag> search(
-		long[] groupIds, String name, int start, int end) {
+			long[] groupIds, String name, String[] tagProperties, int start,
+			int end)
+			throws SystemException {
 
-		return assetTagPersistence.findByG_LikeN(
-			groupIds, name, start, end, new AssetTagNameComparator());
+		return assetTagFinder.findByG_N_P(
+				groupIds, name, tagProperties, start, end, null);
 	}
 
-	@Override
-	public BaseModelSearchResult<AssetTag> searchTags(
-			long[] groupIds, String name, int start, int end, Sort sort)
-		throws PortalException {
-
-		ServiceContext serviceContext =
-			ServiceContextThreadLocal.getServiceContext();
-
-		SearchContext searchContext = buildSearchContext(
-			serviceContext.getCompanyId(), groupIds, name, start, end, sort);
-
-		return searchTags(searchContext);
-	}
-
-	@Indexable(type = IndexableType.REINDEX)
 	@Override
 	public AssetTag updateTag(
-			long userId, long tagId, String name, ServiceContext serviceContext)
-		throws PortalException {
+			long userId, long tagId, String name, String[] tagProperties,
+			ServiceContext serviceContext)
+			throws PortalException, SystemException {
 
 		// Tag
 
@@ -696,37 +525,79 @@ public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
 
 		String oldName = tag.getName();
 
-		name = StringUtil.toLowerCase(StringUtil.trim(name));
+		tag.setModifiedDate(new Date());
+
+		name = name.trim();
+		name = name.toLowerCase();
+
+		if (tagProperties == null) {
+			tagProperties = new String[0];
+		}
 
 		if (!name.equals(tag.getName()) && hasTag(tag.getGroupId(), name)) {
 			throw new DuplicateTagException(
-				"A tag with the name " + name + " already exists");
+					"A tag with the name " + name + " already exists");
 		}
 
-		String tagName = tag.getName();
+		if (!tag.getName().equals(name)) {
+			try {
+				AssetTag existingAssetTag = getTag(tag.getGroupId(), name);
 
-		if (!tagName.equals(name)) {
-			AssetTag existingAssetTag = fetchTag(tag.getGroupId(), name);
-
-			if ((existingAssetTag != null) &&
-				(existingAssetTag.getTagId() != tagId)) {
-
-				throw new DuplicateTagException(
-					"A tag with the name " + name + " already exists");
+				if (existingAssetTag.getTagId() != tagId) {
+					throw new DuplicateTagException(
+							"A tag with the name " + name + " already exists");
+				}
 			}
+			catch (NoSuchTagException nste) {
+			}
+		}
+
+		if (name != null && name.length() > 300) {
+			name = name.substring(0, 300);
 		}
 
 		validate(name);
 
 		tag.setName(name);
 
-		assetTagPersistence.update(tag);
+		assetTagPersistence.update(tag, false);
+
+		// Properties
+
+		List<AssetTagProperty> oldTagProperties =
+				assetTagPropertyPersistence.findByTagId(tagId);
+
+		for (AssetTagProperty tagProperty : oldTagProperties) {
+			assetTagPropertyLocalService.deleteTagProperty(tagProperty);
+		}
+
+		for (int i = 0; i < tagProperties.length; i++) {
+			String[] tagProperty = StringUtil.split(
+					tagProperties[i], CharPool.COLON);
+
+			String key = StringPool.BLANK;
+
+			if (tagProperty.length > 0) {
+				key = GetterUtil.getString(tagProperty[0]);
+			}
+
+			String value = StringPool.BLANK;
+
+			if (tagProperty.length > 1) {
+				value = GetterUtil.getString(tagProperty[1]);
+			}
+
+			if (Validator.isNotNull(key)) {
+				assetTagPropertyLocalService.addTagProperty(
+						userId, tagId, key, value);
+			}
+		}
 
 		// Indexer
 
 		if (!oldName.equals(name)) {
 			List<AssetEntry> entries = assetTagPersistence.getAssetEntries(
-				tag.getTagId());
+					tag.getTagId());
 
 			assetEntryLocalService.reindex(entries);
 		}
@@ -734,102 +605,43 @@ public class AssetTagLocalServiceImpl extends AssetTagLocalServiceBaseImpl {
 		return tag;
 	}
 
-	protected SearchContext buildSearchContext(
-		long companyId, long[] groupIds, String name, int start, int end,
-		Sort sort) {
-
-		SearchContext searchContext = new SearchContext();
-
-		Map<String, Serializable> attributes = new HashMap<>();
-
-		attributes.put(Field.NAME, name);
-
-		searchContext.setAttributes(attributes);
-
-		searchContext.setCompanyId(companyId);
-		searchContext.setEnd(end);
-		searchContext.setGroupIds(groupIds);
-		searchContext.setKeywords(name);
-		searchContext.setStart(start);
-
-		if (sort != null) {
-			searchContext.setSorts(sort);
-		}
-
-		QueryConfig queryConfig = searchContext.getQueryConfig();
-
-		queryConfig.setHighlightEnabled(false);
-		queryConfig.setScoreEnabled(false);
-
-		return searchContext;
-	}
-
-	protected String[] getTagNames(List<AssetTag> tags) {
-		return ListUtil.toArray(tags, AssetTag.NAME_ACCESSOR);
-	}
-
-	protected List<AssetTag> getTags(Hits hits) throws PortalException {
-		List<Document> documents = hits.toList();
-
-		List<AssetTag> tags = new ArrayList<>(documents.size());
-
-		for (Document document : documents) {
-			long tagId = GetterUtil.getLong(document.get(Field.ENTRY_CLASS_PK));
-
-			AssetTag tag = fetchAssetTag(tagId);
-
-			if (tag == null) {
-				tags = null;
-
-				Indexer<AssetTag> indexer = IndexerRegistryUtil.getIndexer(
-					AssetTag.class);
-
-				long companyId = GetterUtil.getLong(
-					document.get(Field.COMPANY_ID));
-
-				indexer.delete(companyId, document.getUID());
-			}
-			else if (tags != null) {
-				tags.add(tag);
-			}
-		}
-
-		return tags;
-	}
-
-	protected BaseModelSearchResult<AssetTag> searchTags(
-			SearchContext searchContext)
-		throws PortalException {
-
-		Indexer<AssetTag> indexer = IndexerRegistryUtil.nullSafeGetIndexer(
-			AssetTag.class);
-
-		for (int i = 0; i < 10; i++) {
-			Hits hits = indexer.search(searchContext);
-
-			List<AssetTag> tags = getTags(hits);
-
-			if (tags != null) {
-				return new BaseModelSearchResult<>(tags, hits.getLength());
-			}
-		}
-
-		throw new SearchException(
-			"Unable to fix the search index after 10 attempts");
+	protected String[] getTagNames(List<AssetTag>tags) {
+		return StringUtil.split(
+				ListUtil.toString(tags, AssetTag.NAME_ACCESSOR));
 	}
 
 	protected void validate(String name) throws PortalException {
-		if (Validator.isNull(name)) {
-			throw new AssetTagNameException(
-				"Tag name cannot be an empty string");
-		}
-
-		if (!AssetUtil.isValidWord(name)) {
+		if (!this.isValidWord(name)) {
 			throw new AssetTagException(
-				StringUtil.merge(
-					AssetUtil.INVALID_CHARACTERS, StringPool.SPACE),
-				AssetTagException.INVALID_CHARACTER);
+					StringUtil.merge(
+							INVALID_CHARACTERS, StringPool.SPACE),
+					AssetTagException.INVALID_CHARACTER);
 		}
 	}
+	private boolean isValidWord(String word) {
+		if (Validator.isNull(word)) {
+			return false;
+		}
+		else {
+			char[] wordCharArray = word.toCharArray();
 
+			for (char c : wordCharArray) {
+				for (char invalidChar : INVALID_CHARACTERS) {
+					if (c == invalidChar) {
+						if (_log.isDebugEnabled()) {
+							_log.debug(
+									"Word " + word + " is not valid because " + c +
+											" is not allowed");
+						}
+
+						return false;
+					}
+				}
+			}
+		}
+
+		return true;
+	}
+
+	private static Log _log = LogFactoryUtil.getLog(AssetTagLocalServiceImpl.class);
 }
